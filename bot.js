@@ -486,6 +486,9 @@ Need help? Contact @xiniluca
 
       let menuButtons = [];
 
+      // Featured button at the top
+      menuButtons.push([Markup.button.callback('🚀 What is SkillSwap?', 'menu_about')]);
+
       // Buyer buttons
       if (isBuyerOrBoth) {
         menuButtons.push([Markup.button.callback('🔍 Browse Services', 'menu_browse')]);
@@ -504,7 +507,6 @@ Need help? Contact @xiniluca
       // Common buttons
       menuButtons.push([Markup.button.callback('🏆 Top Sellers', 'menu_top_sellers')]);
       menuButtons.push([Markup.button.callback('👤 My Profile', 'menu_profile')]);
-      menuButtons.push([Markup.button.callback('🚀 What is SkillSwap?', 'menu_about')]);
       menuButtons.push([Markup.button.callback('❓ Help', 'menu_help')]);
 
       const keyboard = Markup.inlineKeyboard(menuButtons);
