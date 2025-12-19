@@ -317,7 +317,7 @@ Need help? Contact our support team!
 🎭 Role: ${user.role}
 📅 Joined: ${new Date(user.created_at).toLocaleDateString()}
 
-🔄 Want to change your role or update info? Contact support.
+🔄 Want to change your role or update info? Contact @xiniluca
       `;
       
       const backButton = Markup.inlineKeyboard([
@@ -374,14 +374,15 @@ Need help? Contact our support team!
 • Share requirements easily
 • Receive completed work directly
 
-Need help? Contact @support
+Need help? Contact @xiniluca
       `;
       
-      const backButton = Markup.inlineKeyboard([
+      const helpButtons = Markup.inlineKeyboard([
+        [Markup.button.url('💬 Contact Support', 'https://t.me/xiniluca')],
         [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
       ]);
       
-      await ctx.editMessageText(helpText, { parse_mode: 'Markdown', ...backButton });
+      await ctx.editMessageText(helpText, { parse_mode: 'Markdown', ...helpButtons });
     });
 
     this.bot.action('back_to_menu', async (ctx) => {
