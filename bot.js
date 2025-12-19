@@ -14,43 +14,169 @@ class SkillSwapBot {
   setupHandlers() {
     // Start command
     this.bot.start(async (ctx) => {
-      const user = await this.db.getUser(ctx.from.id);
-      if (user) {
-        await this.showMainMenu(ctx, user);
-      } else {
-        await this.startRegistration(ctx);
+      try {
+        const user = await this.db.getUser(ctx.from.id);
+        if (user) {
+          await this.showMainMenu(ctx, user);
+        } else {
+          await this.startRegistration(ctx);
+        }
+      } catch (error) {
+        console.error('Start error:', error);
+        await ctx.reply('Welcome to SkillSwap! Use /help for commands.');
       }
     });
 
     // Help command
     this.bot.help((ctx) => {
       const helpText = `
-🤖 *SkillSwap Bot Commands*
+🤖 **SkillSwap Bot Commands**
 
-📝 *General:*
+📝 **General:**
 /start - Register or welcome back
 /help - Show this help message
 /profile - View your profile
 
-🔍 *Browse Services:*
+🔍 **Browse Services:**
 /search [keyword] - Search for services
 /browse - Browse all services
 
-💼 *For Sellers:*
+💼 **For Sellers:**
 /addservice - Add a new service
 /myservices - View your services
 /promote - Promote your services (💰 $1.99/month)
 
-⭐ *Reviews:*
+⭐ **Reviews:**
 Rate services after purchase (1-5 stars)
 
-💰 *Payments:*
+💰 **Payments:**
 All payments processed securely via our payment system
 Sellers receive 85% of the final price
 
-Need help? Contact our support team!
+Need help? Contact @xiniluca
       `;
       ctx.replyWithMarkdown(helpText);
+    });
+
+    // Menu handlers
+    this.bot.action('menu_browse', async (ctx) => {
+      await ctx.answerCbQuery();
+      const services = await this.db.browseServices();
+      if (services.length === 0) {
+        await ctx.editMessageText('No services available yet 😔\n\nBe the first to add a service!');
+        return;
+      }
+      await this.displayServicesWithMenu(ctx, services, '📋 Available Services');
+    });
+
+    this.bot.action('menu_search', async (ctx) => {
+      await ctx.answerCbQuery();
+      this.userStates.set(ctx.from.id, { step: 'search_keyword' });
+      
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '🔎 **Search Services**\n\nWhat service are you looking for?\n\nType keywords like:\n• "web design"\n• "logo creation"\n• "content writing"\n• "data entry"\n\nSend your search term now:',
+        { parse_mode: 'Markdown', ...backButton }
+      );
+    });
+
+    this.bot.action('menu_my_orders', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showMyOrders(ctx);
+    });
+
+    this.bot.action('menu_my_services', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showMyServices(ctx);
+    });
+
+    this.bot.action('menu_sales', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showSalesDashboard(ctx);
+    });
+
+    this.bot.action('menu_add_service', async (ctx) => {
+      await ctx.answerCbQuery();
+      const user = await this.db.getUser(ctx.from.id);
+      if (user.role === 'Buyer') {
+        await ctx.editMessageText('❌ Only sellers can add services.\n\nContact @xiniluca to change your role.');
+        return;
+      }
+      this.userStates.set(ctx.from.id, { step: 'service_title' });
+      await ctx.editMessageText('💼 Let\'s add your service!\n\n📝 First, what\'s the title of your service?\n(Keep it short and descriptive)');
+    });
+
+    this.bot.action('menu_profile', async (ctx) => {
+      await ctx.answerCbQuery();
+      const user = await this.db.getUser(ctx.from.id);
+      const profileText = `
+👤 **Your Profile**
+
+📝 Name: ${user.name}
+🆔 Username: ${user.username || 'Not set'}
+🎭 Role: ${user.role}
+📅 Joined: ${new Date(user.created_at).toLocaleDateString()}
+
+🔄 Want to change your role or update info? Contact @xiniluca
+      `;
+      
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(profileText, { parse_mode: 'Markdown', ...backButton });
+    });
+
+    this.bot.action('menu_help', async (ctx) => {
+      await ctx.answerCbQuery();
+      const helpText = `
+🤖 **SkillSwap Help**
+
+**🛒 For Buyers:**
+• Browse or search services
+• Share requirements & documents
+• Get custom quotes
+• Pay securely via Stripe
+• Receive completed work
+• Rate sellers
+
+**💼 For Sellers:**
+• Add your services
+• Receive requests with files
+• Create custom quotes
+• Get paid after delivery
+• Build your reputation
+
+**💰 How It Works:**
+1. Buyer selects service & shares requirements
+2. Seller reviews & sends custom quote
+3. Buyer accepts & pays (seller gets 85%)
+4. Seller delivers work via chat
+5. Buyer rates the experience
+
+**📁 File Sharing:**
+• Upload documents, images, videos
+• Share requirements easily
+• Receive completed work directly
+
+Need help? Contact @xiniluca
+      `;
+      
+      const helpButtons = Markup.inlineKeyboard([
+        [Markup.button.url('💬 Contact Support', 'https://t.me/xiniluca')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(helpText, { parse_mode: 'Markdown', ...helpButtons });
+    });
+
+    this.bot.action('back_to_menu', async (ctx) => {
+      await ctx.answerCbQuery();
+      const user = await this.db.getUser(ctx.from.id);
+      await this.showMainMenu(ctx, user);
     });
 
     // Registration handlers
@@ -63,134 +189,13 @@ Need help? Contact our support team!
         
         await this.db.createUser(ctx.from.id, state.name, state.username, role);
         
-        await ctx.editMessageText(`✅ Registration complete!\n\n👤 Name: ${state.name}\n🎭 Role: ${role}\n\nWelcome to SkillSwap! Use /help to get started.`);
+        await ctx.editMessageText(`✅ Registration complete!\n\n👤 Name: ${state.name}\n🎭 Role: ${role}\n\nWelcome to SkillSwap! Use /start to see the main menu.`);
         
         this.userStates.delete(ctx.from.id);
         
         if (role === 'Seller' || role === 'Both') {
-          await ctx.reply('💡 As a seller, you can add services with /addservice');
+          await ctx.reply('💡 As a seller, you can add services with the menu button');
         }
-      }
-    });
-
-    // Search command
-    this.bot.command('search', async (ctx) => {
-      const keyword = ctx.message.text.split(' ').slice(1).join(' ');
-      if (!keyword) {
-        await ctx.reply('Please provide a search keyword.\nExample: /search web design');
-        return;
-      }
-
-      const services = await this.db.searchServices(keyword);
-      if (services.length === 0) {
-        await ctx.reply(`No services found for "${keyword}" 😔\n\nTry /browse to see all available services.`);
-        return;
-      }
-
-      await this.displayServices(ctx, services, `🔍 Search results for "${keyword}"`);
-    });
-
-    // Browse command
-    this.bot.command('browse', async (ctx) => {
-      const services = await this.db.browseServices();
-      if (services.length === 0) {
-        await ctx.reply('No services available yet 😔\n\nBe the first to add a service with /addservice!');
-        return;
-      }
-
-      await this.displayServices(ctx, services, '📋 Available Services');
-    });
-
-    // Add service command
-    this.bot.command('addservice', async (ctx) => {
-      const user = await this.db.getUser(ctx.from.id);
-      if (!user) {
-        await ctx.reply('Please register first with /start');
-        return;
-      }
-
-      if (user.role === 'Buyer') {
-        await ctx.reply('Only sellers can add services. Contact support to change your role.');
-        return;
-      }
-
-      this.userStates.set(ctx.from.id, { step: 'service_title' });
-      await ctx.reply('💼 Let\'s add your service!\n\nFirst, what\'s the title of your service?\n(Keep it short and descriptive)');
-    });
-
-    // Profile command
-    this.bot.command('profile', async (ctx) => {
-      const user = await this.db.getUser(ctx.from.id);
-      if (!user) {
-        await ctx.reply('Please register first with /start');
-        return;
-      }
-
-      const profileText = `
-👤 *Your Profile*
-
-📝 Name: ${user.name}
-🆔 Username: ${user.username || 'Not set'}
-🎭 Role: ${user.role}
-📅 Joined: ${new Date(user.created_at).toLocaleDateString()}
-      `;
-
-      await ctx.replyWithMarkdown(profileText);
-    });
-
-    // Admin stats
-    this.bot.command('admin', async (ctx) => {
-      if (ctx.from.id.toString() !== this.adminId) {
-        await ctx.reply('❌ Access denied. Admin only.');
-        return;
-      }
-
-      const args = ctx.message.text.split(' ').slice(1);
-      if (args[0] === 'stats') {
-        const stats = await this.db.getStats();
-        const statsText = `
-📊 *SkillSwap Statistics*
-
-👥 Total Users: ${stats.totalUsers}
-💼 Active Sellers: ${stats.activeSellers}
-🛍️ Total Orders: ${stats.totalOrders}
-⚡ Total Services: ${stats.totalServices}
-        `;
-        await ctx.replyWithMarkdown(statsText);
-      }
-    });
-
-    // Text message handler for registration flow and requirements
-    this.bot.on('text', async (ctx) => {
-      try {
-        const state = this.userStates.get(ctx.from.id);
-        if (!state) return;
-
-        if (state.step === 'typing_requirements') {
-          await this.handleRequirementsText(ctx, state);
-        } else if (state.step === 'creating_quote') {
-          await this.handleQuoteCreation(ctx, state);
-        } else if (state.step === 'search_keyword') {
-          await this.handleSearchKeyword(ctx, state);
-        } else {
-          await this.handleRegistrationFlow(ctx, state);
-        }
-      } catch (error) {
-        console.error('Error in text handler:', error);
-        await ctx.reply('Sorry, something went wrong. Please try /start again.');
-      }
-    });
-
-    // File handler for document uploads
-    this.bot.on(['document', 'photo', 'video'], async (ctx) => {
-      try {
-        const state = this.userStates.get(ctx.from.id);
-        if (state && state.step === 'uploading_docs') {
-          await this.handleDocumentUpload(ctx, state);
-        }
-      } catch (error) {
-        console.error('Error in file handler:', error);
-        await ctx.reply('Error processing file. Please try again.');
       }
     });
 
@@ -198,17 +203,6 @@ Need help? Contact our support team!
     this.bot.action(/^buy_(.+)$/, async (ctx) => {
       const serviceId = ctx.match[1];
       await this.handlePurchase(ctx, serviceId);
-    });
-
-    // Order management handlers
-    this.bot.action(/^accept_order_(\d+)$/, async (ctx) => {
-      const orderId = ctx.match[1];
-      await this.handleOrderAcceptance(ctx, orderId, true);
-    });
-
-    this.bot.action(/^decline_order_(\d+)$/, async (ctx) => {
-      const orderId = ctx.match[1];
-      await this.handleOrderAcceptance(ctx, orderId, false);
     });
 
     // Requirements collection handlers
@@ -270,127 +264,6 @@ Need help? Contact our support team!
       );
     });
 
-    // Menu handlers
-    this.bot.action('menu_browse', async (ctx) => {
-      await ctx.answerCbQuery();
-      const services = await this.db.browseServices();
-      if (services.length === 0) {
-        await ctx.editMessageText('No services available yet 😔\n\nBe the first to add a service!');
-        return;
-      }
-      await this.displayServicesWithMenu(ctx, services, '📋 Available Services');
-    });
-
-    this.bot.action('menu_search', async (ctx) => {
-      await ctx.answerCbQuery();
-      this.userStates.set(ctx.from.id, { step: 'search_keyword' });
-      
-      const backButton = Markup.inlineKeyboard([
-        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
-      ]);
-      
-      await ctx.editMessageText(
-        '🔎 **Search Services**\n\nWhat service are you looking for?\n\nType keywords like:\n• "web design"\n• "logo creation"\n• "content writing"\n• "data entry"\n\nSend your search term now:',
-        { parse_mode: 'Markdown', ...backButton }
-      );
-    });
-
-    this.bot.action('menu_add_service', async (ctx) => {
-      await ctx.answerCbQuery();
-      const user = await this.db.getUser(ctx.from.id);
-      if (user.role === 'Buyer') {
-        await ctx.editMessageText('❌ Only sellers can add services.\n\nContact support to change your role.');
-        return;
-      }
-      this.userStates.set(ctx.from.id, { step: 'service_title' });
-      await ctx.editMessageText('💼 Let\'s add your service!\n\n📝 First, what\'s the title of your service?\n(Keep it short and descriptive)');
-    });
-
-    this.bot.action('menu_profile', async (ctx) => {
-      await ctx.answerCbQuery();
-      const user = await this.db.getUser(ctx.from.id);
-      const profileText = `
-👤 **Your Profile**
-
-📝 Name: ${user.name}
-🆔 Username: ${user.username || 'Not set'}
-🎭 Role: ${user.role}
-📅 Joined: ${new Date(user.created_at).toLocaleDateString()}
-
-🔄 Want to change your role or update info? Contact @xiniluca
-      `;
-      
-      const backButton = Markup.inlineKeyboard([
-        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
-      ]);
-      
-      await ctx.editMessageText(profileText, { parse_mode: 'Markdown', ...backButton });
-    });
-
-    this.bot.action('menu_my_orders', async (ctx) => {
-      await ctx.answerCbQuery();
-      await this.showMyOrders(ctx);
-    });
-
-    this.bot.action('menu_my_services', async (ctx) => {
-      await ctx.answerCbQuery();
-      await this.showMyServices(ctx);
-    });
-
-    this.bot.action('menu_sales', async (ctx) => {
-      await ctx.answerCbQuery();
-      await this.showSalesDashboard(ctx);
-    });
-
-    this.bot.action('menu_help', async (ctx) => {
-      await ctx.answerCbQuery();
-      const helpText = `
-🤖 **SkillSwap Help**
-
-**🛒 For Buyers:**
-• Browse or search services
-• Share requirements & documents
-• Get custom quotes
-• Pay securely via Stripe
-• Receive completed work
-• Rate sellers
-
-**💼 For Sellers:**
-• Add your services
-• Receive requests with files
-• Create custom quotes
-• Get paid after delivery
-• Build your reputation
-
-**💰 How It Works:**
-1. Buyer selects service & shares requirements
-2. Seller reviews & sends custom quote
-3. Buyer accepts & pays (seller gets 85%)
-4. Seller delivers work via chat
-5. Buyer rates the experience
-
-**📁 File Sharing:**
-• Upload documents, images, videos
-• Share requirements easily
-• Receive completed work directly
-
-Need help? Contact @xiniluca
-      `;
-      
-      const helpButtons = Markup.inlineKeyboard([
-        [Markup.button.url('💬 Contact Support', 'https://t.me/xiniluca')],
-        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
-      ]);
-      
-      await ctx.editMessageText(helpText, { parse_mode: 'Markdown', ...helpButtons });
-    });
-
-    this.bot.action('back_to_menu', async (ctx) => {
-      await ctx.answerCbQuery();
-      const user = await this.db.getUser(ctx.from.id);
-      await this.showMainMenu(ctx, user);
-    });
-
     // Rating buttons
     this.bot.action(/^rate_(\d+)_(\d+)$/, async (ctx) => {
       const orderId = ctx.match[1];
@@ -431,6 +304,40 @@ Need help? Contact @xiniluca
         console.log('Could not notify seller about rating:', error.message);
       }
     });
+
+    // Text message handler
+    this.bot.on('text', async (ctx) => {
+      try {
+        const state = this.userStates.get(ctx.from.id);
+        if (!state) return;
+
+        if (state.step === 'typing_requirements') {
+          await this.handleRequirementsText(ctx, state);
+        } else if (state.step === 'creating_quote') {
+          await this.handleQuoteCreation(ctx, state);
+        } else if (state.step === 'search_keyword') {
+          await this.handleSearchKeyword(ctx, state);
+        } else {
+          await this.handleRegistrationFlow(ctx, state);
+        }
+      } catch (error) {
+        console.error('Error in text handler:', error);
+        await ctx.reply('Sorry, something went wrong. Please try /start again.');
+      }
+    });
+
+    // File handler for document uploads
+    this.bot.on(['document', 'photo', 'video'], async (ctx) => {
+      try {
+        const state = this.userStates.get(ctx.from.id);
+        if (state && state.step === 'uploading_docs') {
+          await this.handleDocumentUpload(ctx, state);
+        }
+      } catch (error) {
+        console.error('Error in file handler:', error);
+        await ctx.reply('Error processing file. Please try again.');
+      }
+    });
   }
 
   async showMainMenu(ctx, user) {
@@ -444,11 +351,14 @@ Need help? Contact @xiniluca
       if (isBuyerOrBoth) {
         menuButtons.push([Markup.button.callback('🔍 Browse Services', 'menu_browse')]);
         menuButtons.push([Markup.button.callback('🔎 Search Services', 'menu_search')]);
+        menuButtons.push([Markup.button.callback('📋 My Orders', 'menu_my_orders')]);
       }
 
       // Seller buttons
       if (isSellerOrBoth) {
+        menuButtons.push([Markup.button.callback('💼 My Services', 'menu_my_services')]);
         menuButtons.push([Markup.button.callback('➕ Add Service', 'menu_add_service')]);
+        menuButtons.push([Markup.button.callback('📊 Sales Dashboard', 'menu_sales')]);
       }
 
       // Common buttons
@@ -536,35 +446,15 @@ Need help? Contact @xiniluca
 
         const finalPrice = (state.price * 1.15).toFixed(2);
         
-        await ctx.reply(`✅ Service added successfully!\n\n💼 ${state.title}\n📝 ${state.description}\n💰 Customer pays: $${finalPrice} (you get: $${state.price.toFixed(2)})\n⏱️ Delivery: ${state.delivery}`);
+        const backButton = Markup.inlineKeyboard([
+          [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+        ]);
+        
+        await ctx.reply(`✅ Service added successfully!\n\n💼 ${state.title}\n📝 ${state.description}\n💰 Customer pays: $${finalPrice} (you get: $${state.price.toFixed(2)})\n⏱️ Delivery: ${state.delivery}`, backButton);
         
         this.userStates.delete(ctx.from.id);
         break;
     }
-  }
-
-  async displayServices(ctx, services, title) {
-    let message = `${title}\n\n`;
-    
-    for (let i = 0; i < services.length; i++) {
-      const service = services[i];
-      const finalPrice = (service.net_price * 1.15).toFixed(2);
-      const rating = service.avg_rating > 0 ? `⭐ ${service.avg_rating.toFixed(1)}` : '⭐ New';
-      const promoted = service.is_promoted ? '🌟 ' : '';
-      
-      message += `${i + 1}. ${promoted}*${service.title}*\n`;
-      message += `👤 ${service.seller_name} ${rating}\n`;
-      message += `📝 ${service.description}\n`;
-      message += `💰 $${finalPrice} • ⏱️ ${service.delivery_time}\n\n`;
-    }
-
-    const keyboard = Markup.inlineKeyboard(
-      services.map((service, index) => [
-        Markup.button.callback(`🛒 Buy #${index + 1}`, `buy_${service.id}`)
-      ])
-    );
-
-    await ctx.replyWithMarkdown(message, keyboard);
   }
 
   async displayServicesWithMenu(ctx, services, title) {
@@ -623,48 +513,11 @@ Need help? Contact @xiniluca
     ]);
 
     await ctx.editMessageText(
-      `📋 *Service Request: ${service.title}*\n\n👤 Seller: ${service.seller_name}\n💰 Base Price: $${(service.net_price * 1.15).toFixed(2)}\n\n📝 *Step 1: Share Your Requirements*\n\nPlease provide details about what you need:\n• Project description\n• Specific requirements\n• Files/documents\n• Deadline preferences\n\nThe seller will review and provide a custom quote.`,
+      `📋 *Service Request: ${service.title}*\n\n👤 Seller: ${service.seller_name}\n💰 Base Price: ${(service.net_price * 1.15).toFixed(2)}\n\n📝 *Step 1: Share Your Requirements*\n\nPlease provide details about what you need:\n• Project description\n• Specific requirements\n• Files/documents\n• Deadline preferences\n\nThe seller will review and provide a custom quote.`,
       { parse_mode: 'Markdown', ...requirementsKeyboard }
     );
 
     await ctx.answerCbQuery('Starting request process...');
-  }
-
-    // Notify admin
-    try {
-      await this.bot.telegram.sendMessage(
-        this.adminId,
-        `💰 *New Order - Payment Required*\n\n📋 Transaction: ${transactionId}\n👤 Seller: ${service.seller_name}\n💰 Transfer to seller: $${service.net_price.toFixed(2)}\n💳 Payment method: ${service.payment_method}\n\n⚡ Process payment after confirmation!`,
-        { parse_mode: 'Markdown' }
-      );
-    } catch (error) {
-      console.log('Could not notify admin:', error.message);
-    }
-
-    await ctx.answerCbQuery('Order created! Complete payment to proceed.');
-
-    // Simulate order completion for demo (in real app, this would be triggered by payment webhook)
-    setTimeout(async () => {
-      try {
-        const ratingKeyboard = Markup.inlineKeyboard([
-          [
-            Markup.button.callback('⭐ 1', `rate_${transactionId}_1`),
-            Markup.button.callback('⭐ 2', `rate_${transactionId}_2`),
-            Markup.button.callback('⭐ 3', `rate_${transactionId}_3`),
-            Markup.button.callback('⭐ 4', `rate_${transactionId}_4`),
-            Markup.button.callback('⭐ 5', `rate_${transactionId}_5`)
-          ]
-        ]);
-
-        await this.bot.telegram.sendMessage(
-          ctx.from.id,
-          `✅ Service completed!\n\n💼 ${service.title}\n👤 Seller: ${service.seller_name}\n\nHow would you rate this service?`,
-          ratingKeyboard
-        );
-      } catch (error) {
-        console.log('Could not send rating request:', error.message);
-      }
-    }, 30000); // 30 seconds for demo
   }
 
   async handleRequirementsText(ctx, state) {
@@ -738,14 +591,13 @@ Need help? Contact @xiniluca
     // Notify seller
     const sellerKeyboard = Markup.inlineKeyboard([
       [Markup.button.callback('💰 Send Quote', `send_quote_${orderId}`)],
-      [Markup.button.callback('❌ Decline Request', `decline_request_${orderId}`)],
-      [Markup.button.callback('💬 Ask Questions', `contact_buyer_${ctx.from.id}`)]
+      [Markup.button.callback('❌ Decline Request', `decline_request_${orderId}`)]
     ]);
 
     try {
       await this.bot.telegram.sendMessage(
         service.seller_id,
-        `🔔 *New Service Request!*\n\n💼 Service: ${service.title}\n👤 Buyer: ${user.name} (@${user.username || 'no username'})\n📋 Request ID: ${orderId}\n\n📝 *Requirements:*\n${requirements}\n\n💡 *Next Steps:*\n• Review the requirements\n• Create a custom quote\n• Or ask for clarification`,
+        `🔔 *New Service Request!*\n\n💼 Service: ${service.title}\n👤 Buyer: ${user.name} (@${user.username || 'no username'})\n📋 Request ID: ${orderId}\n\n📝 *Requirements:*\n${requirements}\n\n💡 *Next Steps:*\n• Review the requirements\n• Create a custom quote\n• Or decline if not suitable`,
         { parse_mode: 'Markdown', ...sellerKeyboard }
       );
     } catch (error) {
@@ -786,14 +638,13 @@ Need help? Contact @xiniluca
     // Send quote to buyer
     const quoteKeyboard = Markup.inlineKeyboard([
       [Markup.button.callback('✅ Accept Quote', `accept_quote_${orderId}`)],
-      [Markup.button.callback('❌ Decline Quote', `decline_quote_${orderId}`)],
-      [Markup.button.callback('💬 Ask Questions', `contact_seller_${order.seller_id}`)]
+      [Markup.button.callback('❌ Decline Quote', `decline_quote_${orderId}`)]
     ]);
 
     try {
       await this.bot.telegram.sendMessage(
         order.buyer_id,
-        `💰 *Custom Quote Received!*\n\n📋 Request ID: ${orderId}\n💵 Seller's Price: $${price.toFixed(2)}\n💳 Total (with fees): $${finalPrice}\n\n📝 *Quote Details:*\n${description}\n\n🤔 *Your Options:*\n• Accept and proceed to payment\n• Decline and look elsewhere\n• Ask questions for clarification`,
+        `💰 *Custom Quote Received!*\n\n📋 Request ID: ${orderId}\n💵 Seller's Price: $${price.toFixed(2)}\n💳 Total (with fees): $${finalPrice}\n\n📝 *Quote Details:*\n${description}\n\n🤔 *Your Options:*\n• Accept and proceed to payment\n• Decline and look elsewhere`,
         { parse_mode: 'Markdown', ...quoteKeyboard }
       );
     } catch (error) {
@@ -1024,14 +875,6 @@ Need help? Contact @xiniluca
       'cancelled': '🚫'
     };
     return statusEmojis[status] || '📋';
-  }
-
-  setWebhook(url) {
-    return this.bot.telegram.setWebhook(url);
-  }
-
-  webhookCallback() {
-    return this.bot.webhookCallback('/webhook');
   }
 
   launch() {
