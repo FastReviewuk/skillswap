@@ -65,3 +65,6 @@ process.once('SIGTERM', () => {
   console.log('🛑 Shutting down gracefully...');
   process.exit(0);
 });
+
+// Export for compatibility
+module.exports = app;
