@@ -120,13 +120,14 @@ class Database {
       const query = `
         SELECT s.*, u.name as seller_name, u.username as seller_username,
                COALESCE(AVG(r.rating), 0) as avg_rating,
-               COUNT(r.rating) as review_count
+               COUNT(r.rating) as review_count,
+               CASE WHEN s.is_promoted = 1 AND s.promotion_expires > datetime('now') THEN 1 ELSE 0 END as is_currently_promoted
         FROM services s
         JOIN users u ON s.seller_id = u.telegram_id
         LEFT JOIN reviews r ON r.seller_id = s.seller_id
         WHERE s.title LIKE ? OR s.description LIKE ?
         GROUP BY s.id
-        ORDER BY s.is_promoted DESC, s.created_at DESC
+        ORDER BY is_currently_promoted DESC, avg_rating DESC, s.created_at DESC
         LIMIT ?
       `;
       this.db.all(query, [`%${keyword}%`, `%${keyword}%`, limit], (err, rows) => {
@@ -141,12 +142,13 @@ class Database {
       const query = `
         SELECT s.*, u.name as seller_name, u.username as seller_username,
                COALESCE(AVG(r.rating), 0) as avg_rating,
-               COUNT(r.rating) as review_count
+               COUNT(r.rating) as review_count,
+               CASE WHEN s.is_promoted = 1 AND s.promotion_expires > datetime('now') THEN 1 ELSE 0 END as is_currently_promoted
         FROM services s
         JOIN users u ON s.seller_id = u.telegram_id
         LEFT JOIN reviews r ON r.seller_id = s.seller_id
         GROUP BY s.id
-        ORDER BY s.is_promoted DESC, avg_rating DESC, s.created_at DESC
+        ORDER BY is_currently_promoted DESC, avg_rating DESC, s.created_at DESC
         LIMIT ?
       `;
       this.db.all(query, [limit], (err, rows) => {
@@ -264,6 +266,53 @@ class Database {
       Promise.all(promises)
         .then(() => resolve(stats))
         .catch(reject);
+    });
+  }
+
+  getTopSellers(limit = 10) {
+    return new Promise((resolve, reject) => {
+      const query = `
+        SELECT 
+          u.name,
+          u.telegram_id,
+          COALESCE(AVG(r.rating), 0) as avg_rating,
+          COUNT(DISTINCT o.id) as total_orders,
+          COALESCE(SUM(o.custom_price), 0) as total_earned,
+          COUNT(DISTINCT s.id) as active_services,
+          MAX(CASE WHEN s.is_promoted = 1 AND s.promotion_expires > datetime('now') THEN 1 ELSE 0 END) as is_promoted
+        FROM users u
+        LEFT JOIN services s ON u.telegram_id = s.seller_id
+        LEFT JOIN orders o ON u.telegram_id = o.seller_id AND o.status = 'completed'
+        LEFT JOIN reviews r ON u.telegram_id = r.seller_id
+        WHERE u.role IN ('Seller', 'Both')
+        GROUP BY u.telegram_id, u.name
+        HAVING active_services > 0
+        ORDER BY 
+          is_promoted DESC,
+          avg_rating DESC,
+          total_orders DESC,
+          total_earned DESC
+        LIMIT ?
+      `;
+      
+      this.db.all(query, [limit], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+  }
+
+  // Check and expire promotions
+  expirePromotions() {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        'UPDATE services SET is_promoted = 0 WHERE is_promoted = 1 AND promotion_expires <= datetime("now")',
+        [],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.changes);
+        }
+      );
     });
   }
 

@@ -9,6 +9,11 @@ class SkillSwapBot {
     this.paymentLink = paymentLink;
     this.userStates = new Map();
     this.setupHandlers();
+    
+    // Check for expired promotions every hour
+    setInterval(() => {
+      this.db.expirePromotions().catch(console.error);
+    }, 60 * 60 * 1000);
   }
 
   setupHandlers() {
@@ -128,6 +133,69 @@ Need help? Contact @xiniluca
       ]);
       
       await ctx.editMessageText(profileText, { parse_mode: 'Markdown', ...backButton });
+    });
+
+    this.bot.action('menu_about', async (ctx) => {
+      await ctx.answerCbQuery();
+      const aboutText = `
+🚀 **Welcome to SkillSwap!** 
+
+Turn your 10-minute skill into real cash inside Telegram.
+
+**Got something you're good at?**
+✅ Fix grammar
+✅ Design a Canva post  
+✅ Explain crypto basics
+✅ Debug a spreadsheet
+✅ Translate a paragraph
+✅ Give fitness tips
+
+You can sell it. Today. For real $$$.
+
+💡 **How it works:**
+**SELL:** Add service → describe your micro-skill (under 15 mins), set your price
+**BUY:** Browse gigs → pay securely → get your result in-chat
+**EARN:** Every time someone buys your skill, you get paid (minus a small 15% service fee)
+
+We handle the payment link. You deliver the value. It's that simple.
+
+🌟 **Why join?**
+• No sign-ups — just Telegram
+• Get paid in dollars — fast & easy  
+• Top sellers get featured (promote your gig for just $1.99/month!)
+• Build your reputation with star ratings ⭐⭐⭐⭐⭐
+
+💬 *"I made $12 last week just by proofreading 4 texts between classes."* — Sofia, student & SkillSwap seller
+
+✨ Your skill has value. Even if it feels "small" — someone out there needs it right now.
+
+👉 Ready to earn? Add your first service or browse what's live today!
+
+**SkillSwap — where tiny talents turn into real income.** 💰
+      `;
+      
+      const aboutButtons = Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Add My Service', 'menu_add_service')],
+        [Markup.button.callback('🔍 Browse Services', 'menu_browse')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(aboutText, { parse_mode: 'Markdown', ...aboutButtons });
+    });
+
+    this.bot.action('menu_top_sellers', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showTopSellers(ctx);
+    });
+
+    this.bot.action('menu_promote', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showPromotionOptions(ctx);
+    });
+
+    this.bot.action(/^promote_service_(\d+)$/, async (ctx) => {
+      const serviceId = ctx.match[1];
+      await this.handleServicePromotion(ctx, serviceId);
     });
 
     this.bot.action('menu_help', async (ctx) => {
@@ -359,10 +427,13 @@ Need help? Contact @xiniluca
         menuButtons.push([Markup.button.callback('💼 My Services', 'menu_my_services')]);
         menuButtons.push([Markup.button.callback('➕ Add Service', 'menu_add_service')]);
         menuButtons.push([Markup.button.callback('📊 Sales Dashboard', 'menu_sales')]);
+        menuButtons.push([Markup.button.callback('🌟 Promote Services', 'menu_promote')]);
       }
 
       // Common buttons
+      menuButtons.push([Markup.button.callback('🏆 Top Sellers', 'menu_top_sellers')]);
       menuButtons.push([Markup.button.callback('👤 My Profile', 'menu_profile')]);
+      menuButtons.push([Markup.button.callback('🚀 What is SkillSwap?', 'menu_about')]);
       menuButtons.push([Markup.button.callback('❓ Help', 'menu_help')]);
 
       const keyboard = Markup.inlineKeyboard(menuButtons);
@@ -464,7 +535,7 @@ Need help? Contact @xiniluca
       const service = services[i];
       const finalPrice = (service.net_price * 1.15).toFixed(2);
       const rating = service.avg_rating > 0 ? `⭐ ${service.avg_rating.toFixed(1)}` : '⭐ New';
-      const promoted = service.is_promoted ? '🌟 ' : '';
+      const promoted = (service.is_currently_promoted || service.is_promoted) ? '🌟 ' : '';
       
       message += `${i + 1}. ${promoted}*${service.title}*\n`;
       message += `👤 ${service.seller_name} ${rating}\n`;
@@ -862,6 +933,157 @@ Need help? Contact @xiniluca
     }
 
     await this.displayServicesWithMenu(ctx, services, `🔍 Search: "${keyword}"`);
+  }
+
+  async showTopSellers(ctx) {
+    const topSellers = await this.db.getTopSellers();
+    
+    if (topSellers.length === 0) {
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Browse Services', 'menu_browse')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '🏆 **Top Sellers**\n\nNo sellers yet! Be the first to add a service and start earning.',
+        { parse_mode: 'Markdown', ...backButton }
+      );
+      return;
+    }
+
+    let message = '🏆 **Top Sellers Leaderboard**\n\n';
+    
+    topSellers.forEach((seller, i) => {
+      const position = i + 1;
+      const medal = position === 1 ? '🥇' : position === 2 ? '🥈' : position === 3 ? '🥉' : `${position}.`;
+      const promoted = seller.is_promoted ? '🌟 ' : '';
+      const rating = seller.avg_rating > 0 ? `⭐ ${seller.avg_rating.toFixed(1)}` : '⭐ New';
+      
+      message += `${medal} ${promoted}**${seller.name}**\n`;
+      message += `   ${rating} • ${seller.total_orders} orders • $${seller.total_earned.toFixed(2)} earned\n`;
+      message += `   Active Services: ${seller.active_services}\n\n`;
+    });
+
+    message += '💡 *Want to be featured? Promote your services for just $1.99/month!*';
+
+    const backButton = Markup.inlineKeyboard([
+      [Markup.button.callback('🌟 Promote My Services', 'menu_promote')],
+      [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+    ]);
+
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', ...backButton });
+  }
+
+  async showPromotionOptions(ctx) {
+    const user = await this.db.getUser(ctx.from.id);
+    
+    if (user.role === 'Buyer') {
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '❌ **Promotion Available for Sellers Only**\n\nOnly sellers can promote their services.\n\nContact @xiniluca to change your role to Seller.',
+        { parse_mode: 'Markdown', ...backButton }
+      );
+      return;
+    }
+
+    const services = await this.db.getUserServices(ctx.from.id);
+    
+    if (services.length === 0) {
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Add Service First', 'menu_add_service')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '💼 **No Services to Promote**\n\nYou need to add services before you can promote them.\n\nCreate your first service to get started!',
+        { parse_mode: 'Markdown', ...backButton }
+      );
+      return;
+    }
+
+    let message = '🌟 **Promote Your Services**\n\n💰 **Only $1.99/month per service**\n\n✨ **Benefits:**\n• 🔝 Top position in search results\n• 🌟 Featured badge on your services\n• 📈 Higher visibility to buyers\n• 🏆 Featured in Top Sellers leaderboard\n\n📋 **Your Services:**\n\n';
+    
+    let buttons = [];
+    
+    services.forEach((service, i) => {
+      const promoted = service.is_promoted ? '🌟 PROMOTED' : 'Not promoted';
+      const expiryText = service.is_promoted && service.promotion_expires ? 
+        `(expires ${new Date(service.promotion_expires).toLocaleDateString()})` : '';
+      
+      message += `${i + 1}. **${service.title}**\n`;
+      message += `   Status: ${promoted} ${expiryText}\n`;
+      message += `   Price: $${(service.net_price * 1.15).toFixed(2)}\n\n`;
+      
+      if (!service.is_promoted || (service.promotion_expires && new Date(service.promotion_expires) < new Date())) {
+        buttons.push([Markup.button.callback(`🌟 Promote "${service.title}"`, `promote_service_${service.id}`)]);
+      }
+    });
+
+    buttons.push([Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]);
+
+    const keyboard = Markup.inlineKeyboard(buttons);
+
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', ...keyboard });
+  }
+
+  async handleServicePromotion(ctx, serviceId) {
+    await ctx.answerCbQuery();
+    
+    const services = await this.db.getUserServices(ctx.from.id);
+    const service = services.find(s => s.id == serviceId);
+    
+    if (!service) {
+      await ctx.editMessageText('❌ Service not found.');
+      return;
+    }
+
+    // Generate promotion payment link
+    const promotionPrice = '1.99';
+    const transactionId = `PROMO_${Date.now()}_${serviceId}`;
+    const paymentUrl = `${this.paymentLink}?amount=${promotionPrice}&ref=${transactionId}`;
+    
+    const paymentKeyboard = Markup.inlineKeyboard([
+      [Markup.button.url('💳 Pay $1.99 to Promote', paymentUrl)],
+      [Markup.button.callback('🔙 Back to Promotion', 'menu_promote')],
+      [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+    ]);
+
+    await ctx.editMessageText(
+      `🌟 **Promote "${service.title}"**\n\n💰 **Cost:** $1.99/month\n\n✨ **You'll get:**\n• 🔝 Top position in all searches\n• 🌟 Featured badge next to your service\n• 📈 3x more visibility to buyers\n• 🏆 Priority in Top Sellers leaderboard\n\n🔒 **Secure Payment:**\nClick below to pay via Stripe. Your service will be promoted immediately after payment confirmation.\n\n📅 **Duration:** 30 days from activation`,
+      { parse_mode: 'Markdown', ...paymentKeyboard }
+    );
+
+    // Notify admin about promotion payment
+    try {
+      await this.bot.telegram.sendMessage(
+        this.adminId,
+        `🌟 **Promotion Payment Pending**\n\n📋 Transaction: ${transactionId}\n👤 Seller: ${ctx.from.first_name}\n💼 Service: ${service.title}\n💰 Amount: $1.99\n\n⚡ Activate promotion after payment confirmation!`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (error) {
+      console.log('Could not notify admin about promotion:', error.message);
+    }
+
+    // Simulate promotion activation (in real app, this would be triggered by payment webhook)
+    setTimeout(async () => {
+      try {
+        // Set promotion expiry to 30 days from now
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 30);
+        
+        await this.db.promoteService(serviceId, expiryDate.toISOString());
+        
+        await this.bot.telegram.sendMessage(
+          ctx.from.id,
+          `🎉 **Service Promoted Successfully!**\n\n🌟 "${service.title}" is now featured!\n\n✨ **Active until:** ${expiryDate.toLocaleDateString()}\n\n📈 Your service will now appear at the top of search results and get priority visibility.\n\n🏆 Check the Top Sellers leaderboard to see your new position!`
+        );
+      } catch (error) {
+        console.log('Could not activate promotion:', error.message);
+      }
+    }, 10000); // 10 seconds for demo
   }
 
   getOrderStatusEmoji(status) {
