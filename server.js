@@ -24,9 +24,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Webhook endpoint for Telegram
-app.use('/webhook', bot.webhookCallback());
-
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
@@ -37,22 +34,9 @@ app.use((error, req, res, next) => {
 app.listen(PORT, async () => {
   console.log(`🚀 SkillSwap server running on port ${PORT}`);
   
-  // Set webhook if WEBHOOK_URL is provided
-  if (process.env.WEBHOOK_URL) {
-    try {
-      await bot.setWebhook(`${process.env.WEBHOOK_URL}/webhook`);
-      console.log('✅ Webhook set successfully');
-    } catch (error) {
-      console.error('❌ Failed to set webhook:', error.message);
-      // Fallback to polling for development
-      console.log('🔄 Starting polling mode...');
-      bot.launch();
-    }
-  } else {
-    // Development mode with polling
-    console.log('🔄 Starting in polling mode (development)');
-    bot.launch();
-  }
+  // Always use polling mode (no webhook)
+  console.log('🔄 Starting in polling mode...');
+  bot.launch();
 });
 
 // Graceful shutdown
