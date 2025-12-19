@@ -180,6 +180,19 @@ class Database {
     });
   }
 
+  updateOrderStatus(orderId, status) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        'UPDATE orders SET status = ? WHERE id = ?',
+        [status, orderId],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.changes);
+        }
+      );
+    });
+  }
+
   // Review methods
   createReview(orderId, buyerId, sellerId, rating) {
     return new Promise((resolve, reject) => {
