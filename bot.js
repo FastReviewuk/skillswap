@@ -332,6 +332,65 @@ Need help? Contact @xiniluca
       );
     });
 
+    this.bot.action(/^decline_request_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await ctx.answerCbQuery();
+      
+      // Update order status
+      await this.db.updateOrderStatus(orderId, 'declined');
+      
+      // Get order details
+      const order = await this.db.getOrder(orderId);
+      
+      await ctx.editMessageText(
+        `❌ **Request Declined**\n\n📋 Order #${orderId} has been declined.\n\nThe buyer will be notified that you cannot take on this project at this time.`
+      );
+
+      // Notify buyer
+      try {
+        const backButton = Markup.inlineKeyboard([
+          [Markup.button.callback('🔍 Browse Other Services', 'menu_browse')],
+          [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+        ]);
+
+        await this.bot.telegram.sendMessage(
+          order.buyer_id,
+          `❌ **Request Declined**\n\n📋 Order #${orderId}\n\nThe seller has declined your request. This could be due to:\n• Current workload\n• Project complexity\n• Availability\n\nYou can browse other services or try a different seller.`,
+          { parse_mode: 'Markdown', ...backButton }
+        );
+      } catch (error) {
+        console.log('Could not notify buyer about declined request:', error.message);
+      }
+    });
+
+    this.bot.action(/^message_buyer_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await ctx.answerCbQuery();
+      
+      this.userStates.set(ctx.from.id, { 
+        step: 'messaging_buyer', 
+        orderId: orderId 
+      });
+      
+      await ctx.editMessageText(
+        `💬 *Message Buyer*\n\nSend a message to the buyer about Order #${orderId}.\n\nYou can:\n• Ask for clarification\n• Request additional information\n• Discuss project details\n\nType your message now:`
+      );
+    });
+
+    this.bot.action(/^message_seller_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await ctx.answerCbQuery();
+      
+      this.userStates.set(ctx.from.id, { 
+        step: 'messaging_seller', 
+        orderId: orderId 
+      });
+      
+      await ctx.editMessageText(
+        `💬 *Message Seller*\n\nSend a message to the seller about Order #${orderId}.\n\nYou can:\n• Ask questions about the quote\n• Provide additional details\n• Discuss timeline\n\nType your message now:`
+      );
+    });
+
     // Rating buttons
     this.bot.action(/^rate_(\d+)_(\d+)$/, async (ctx) => {
       const orderId = ctx.match[1];
@@ -345,31 +404,38 @@ Need help? Contact @xiniluca
         return;
       }
 
-      // Create review
-      await this.db.createReview(orderId, ctx.from.id, order.seller_id, rating);
-      
-      // Update order status
-      await this.db.updateOrderStatus(orderId, 'completed');
-
-      const stars = '⭐'.repeat(rating);
-      const backButton = Markup.inlineKeyboard([
-        [Markup.button.callback('📋 My Orders', 'menu_my_orders')],
-        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
-      ]);
-
-      await ctx.editMessageText(
-        `✅ **Rating Submitted!**\n\n${stars} You gave ${rating} stars\n\nThank you for your feedback! This helps other buyers make informed decisions.\n\n🎉 Order completed successfully!`,
-        { parse_mode: 'Markdown', ...backButton }
-      );
-
-      // Notify seller about rating
+      // Check if already rated
       try {
-        await this.bot.telegram.sendMessage(
-          order.seller_id,
-          `⭐ **New Rating Received!**\n\n📋 Order #${orderId}\n${stars} ${rating}/5 stars\n\n🎉 Great job! Keep up the excellent work!`
+        // Create review
+        await this.db.createReview(orderId, ctx.from.id, order.seller_id, rating);
+        
+        // Update order status
+        await this.db.updateOrderStatus(orderId, 'completed');
+
+        const stars = '⭐'.repeat(rating);
+        const backButton = Markup.inlineKeyboard([
+          [Markup.button.callback('📋 My Orders', 'menu_my_orders')],
+          [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+        ]);
+
+        await ctx.editMessageText(
+          `✅ **Rating Submitted!**\n\n${stars} You gave ${rating} stars\n\nThank you for your feedback! This helps other buyers make informed decisions.\n\n🎉 Order completed successfully!`,
+          { parse_mode: 'Markdown', ...backButton }
         );
+
+        // Notify seller about rating
+        try {
+          await this.bot.telegram.sendMessage(
+            order.seller_id,
+            `⭐ **New Rating Received!**\n\n📋 Order #${orderId}\n${stars} ${rating}/5 stars\n\n🎉 Great job! Keep up the excellent work!`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (error) {
+          console.log('Could not notify seller about rating:', error.message);
+        }
       } catch (error) {
-        console.log('Could not notify seller about rating:', error.message);
+        console.error('Error submitting rating:', error);
+        await ctx.editMessageText('❌ Error submitting rating. You may have already rated this order.');
       }
     });
 
@@ -385,6 +451,10 @@ Need help? Contact @xiniluca
           await this.handleQuoteCreation(ctx, state);
         } else if (state.step === 'search_keyword') {
           await this.handleSearchKeyword(ctx, state);
+        } else if (state.step === 'messaging_buyer') {
+          await this.handleMessageToBuyer(ctx, state);
+        } else if (state.step === 'messaging_seller') {
+          await this.handleMessageToSeller(ctx, state);
         } else {
           await this.handleRegistrationFlow(ctx, state);
         }
@@ -612,18 +682,38 @@ Need help? Contact @xiniluca
 
   async handleDocumentUpload(ctx, state) {
     let fileInfo = '';
+    let fileId = '';
+    let fileType = '';
+    let fileName = '';
     
     if (ctx.message.document) {
       fileInfo = `📄 Document: ${ctx.message.document.file_name}`;
+      fileId = ctx.message.document.file_id;
+      fileType = 'document';
+      fileName = ctx.message.document.file_name;
     } else if (ctx.message.photo) {
       fileInfo = `🖼️ Image uploaded`;
+      fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id; // Get highest resolution
+      fileType = 'photo';
+      fileName = 'image.jpg';
     } else if (ctx.message.video) {
       fileInfo = `🎥 Video uploaded`;
+      fileId = ctx.message.video.file_id;
+      fileType = 'video';
+      fileName = ctx.message.video.file_name || 'video.mp4';
     }
 
-    // Store file info in user state
+    // Store file info in user state with file details
     if (!state.requirements) state.requirements = [];
+    if (!state.files) state.files = [];
+    
     state.requirements.push(fileInfo);
+    state.files.push({
+      fileId: fileId,
+      fileType: fileType,
+      fileName: fileName,
+      info: fileInfo
+    });
 
     const continueKeyboard = Markup.inlineKeyboard([
       [Markup.button.callback('📎 Add More Files', `req_docs_${state.serviceId}`)],
@@ -632,7 +722,7 @@ Need help? Contact @xiniluca
     ]);
 
     await ctx.reply(
-      `✅ File received!\n\n📋 *Current Requirements:*\n${state.requirements.join('\n\n')}\n\nWhat would you like to do next?`,
+      `✅ File received and saved!\n\n📋 *Current Requirements:*\n${state.requirements.join('\n\n')}\n\nWhat would you like to do next?`,
       { parse_mode: 'Markdown', ...continueKeyboard }
     );
   }
@@ -659,16 +749,35 @@ Need help? Contact @xiniluca
       requirements
     );
 
-    // Notify seller
+    // Save uploaded files to database and forward to seller
+    if (state.files && state.files.length > 0) {
+      for (const file of state.files) {
+        // Save file info to database
+        await this.db.saveOrderFile(orderId, file.fileId, file.fileType, file.fileName, ctx.from.id);
+        
+        // Forward file to seller
+        try {
+          await this.forwardFileToSeller(service.seller_id, file, orderId, user.name);
+        } catch (error) {
+          console.log('Could not forward file to seller:', error.message);
+        }
+      }
+    }
+
+    // Notify seller with request details
     const sellerKeyboard = Markup.inlineKeyboard([
       [Markup.button.callback('💰 Send Quote', `send_quote_${orderId}`)],
-      [Markup.button.callback('❌ Decline Request', `decline_request_${orderId}`)]
+      [Markup.button.callback('❌ Decline Request', `decline_request_${orderId}`)],
+      [Markup.button.callback('💬 Message Buyer', `message_buyer_${orderId}`)]
     ]);
+
+    const fileCount = state.files ? state.files.length : 0;
+    const filesText = fileCount > 0 ? `\n\n📎 *Attached Files:* ${fileCount} file(s) forwarded above` : '';
 
     try {
       await this.bot.telegram.sendMessage(
         service.seller_id,
-        `🔔 *New Service Request!*\n\n💼 Service: ${service.title}\n👤 Buyer: ${user.name} (@${user.username || 'no username'})\n📋 Request ID: ${orderId}\n\n📝 *Requirements:*\n${requirements}\n\n💡 *Next Steps:*\n• Review the requirements\n• Create a custom quote\n• Or decline if not suitable`,
+        `🔔 *New Service Request!*\n\n💼 Service: ${service.title}\n👤 Buyer: ${user.name} (@${user.username || 'no username'})\n📋 Request ID: ${orderId}\n\n📝 *Requirements:*\n${requirements}${filesText}\n\n💡 *Next Steps:*\n• Review the requirements and files\n• Create a custom quote\n• Or decline if not suitable`,
         { parse_mode: 'Markdown', ...sellerKeyboard }
       );
     } catch (error) {
@@ -676,12 +785,37 @@ Need help? Contact @xiniluca
     }
 
     await ctx.editMessageText(
-      `✅ *Request Sent!*\n\n📋 Your request has been sent to ${service.seller_name}.\n\n⏳ *What happens next:*\n1. Seller reviews your requirements\n2. You'll receive a custom quote\n3. Accept quote and pay\n4. Receive your completed work\n\n📱 You'll be notified when the seller responds.`
+      `✅ *Request Sent!*\n\n📋 Your request has been sent to ${service.seller_name}.\n${fileCount > 0 ? `📎 ${fileCount} file(s) forwarded to seller.\n` : ''}\n⏳ *What happens next:*\n1. Seller reviews your requirements and files\n2. You'll receive a custom quote\n3. Accept quote and pay\n4. Receive your completed work\n\n📱 You'll be notified when the seller responds.`
     );
 
     // Clear user state
     this.userStates.delete(ctx.from.id);
     await ctx.answerCbQuery('Request sent successfully!');
+  }
+
+  async forwardFileToSeller(sellerId, file, orderId, buyerName) {
+    const caption = `📎 *File from Order #${orderId}*\n👤 Buyer: ${buyerName}\n📄 File: ${file.fileName}`;
+    
+    try {
+      if (file.fileType === 'document') {
+        await this.bot.telegram.sendDocument(sellerId, file.fileId, {
+          caption: caption,
+          parse_mode: 'Markdown'
+        });
+      } else if (file.fileType === 'photo') {
+        await this.bot.telegram.sendPhoto(sellerId, file.fileId, {
+          caption: caption,
+          parse_mode: 'Markdown'
+        });
+      } else if (file.fileType === 'video') {
+        await this.bot.telegram.sendVideo(sellerId, file.fileId, {
+          caption: caption,
+          parse_mode: 'Markdown'
+        });
+      }
+    } catch (error) {
+      console.log(`Could not forward ${file.fileType} to seller:`, error.message);
+    }
   }
 
   async handleQuoteCreation(ctx, state) {
@@ -1084,6 +1218,85 @@ Need help? Contact @xiniluca
         console.log('Could not activate promotion:', error.message);
       }
     }, 10000); // 10 seconds for demo
+  }
+
+  async handleMessageToBuyer(ctx, state) {
+    const message = ctx.message.text;
+    const orderId = state.orderId;
+    
+    // Get order details
+    const order = await this.db.getOrder(orderId);
+    if (!order || order.seller_id !== ctx.from.id) {
+      await ctx.reply('❌ Invalid order or access denied.');
+      this.userStates.delete(ctx.from.id);
+      return;
+    }
+
+    // Get seller info
+    const seller = await this.db.getUser(ctx.from.id);
+    
+    // Send message to buyer
+    try {
+      const messageKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(`💬 Reply to Seller`, `message_seller_${orderId}`)],
+        [Markup.button.callback('📋 View Order', 'menu_my_orders')]
+      ]);
+
+      await this.bot.telegram.sendMessage(
+        order.buyer_id,
+        `💬 **Message from Seller**\n\n📋 Order #${orderId}\n👤 From: ${seller.name}\n\n📝 **Message:**\n${message}`,
+        { parse_mode: 'Markdown', ...messageKeyboard }
+      );
+
+      await ctx.reply(
+        `✅ **Message Sent!**\n\n📋 Order #${orderId}\n📤 Your message has been delivered to the buyer.\n\n💬 They can reply directly through their order interface.`
+      );
+    } catch (error) {
+      console.log('Could not send message to buyer:', error.message);
+      await ctx.reply('❌ Could not deliver message. The buyer may have blocked the bot.');
+    }
+
+    this.userStates.delete(ctx.from.id);
+  }
+
+  async handleMessageToSeller(ctx, state) {
+    const message = ctx.message.text;
+    const orderId = state.orderId;
+    
+    // Get order details
+    const order = await this.db.getOrder(orderId);
+    if (!order || order.buyer_id !== ctx.from.id) {
+      await ctx.reply('❌ Invalid order or access denied.');
+      this.userStates.delete(ctx.from.id);
+      return;
+    }
+
+    // Get buyer info
+    const buyer = await this.db.getUser(ctx.from.id);
+    
+    // Send message to seller
+    try {
+      const messageKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(`💬 Reply to Buyer`, `message_buyer_${orderId}`)],
+        [Markup.button.callback('💰 Send Quote', `send_quote_${orderId}`)],
+        [Markup.button.callback('📊 Sales Dashboard', 'menu_sales')]
+      ]);
+
+      await this.bot.telegram.sendMessage(
+        order.seller_id,
+        `💬 **Message from Buyer**\n\n📋 Order #${orderId}\n👤 From: ${buyer.name}\n\n📝 **Message:**\n${message}`,
+        { parse_mode: 'Markdown', ...messageKeyboard }
+      );
+
+      await ctx.reply(
+        `✅ **Message Sent!**\n\n📋 Order #${orderId}\n📤 Your message has been delivered to the seller.\n\n💬 They can reply or send you a quote through their dashboard.`
+      );
+    } catch (error) {
+      console.log('Could not send message to seller:', error.message);
+      await ctx.reply('❌ Could not deliver message. The seller may have blocked the bot.');
+    }
+
+    this.userStates.delete(ctx.from.id);
   }
 
   getOrderStatusEmoji(status) {

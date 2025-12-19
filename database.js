@@ -58,6 +58,21 @@ class Database {
       )
     `);
 
+    // Order files table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS order_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER,
+        file_id TEXT,
+        file_type TEXT,
+        file_name TEXT,
+        uploaded_by INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (order_id) REFERENCES orders (id),
+        FOREIGN KEY (uploaded_by) REFERENCES users (telegram_id)
+      )
+    `);
+
     // Reviews table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS reviews (
@@ -311,6 +326,33 @@ class Database {
         function(err) {
           if (err) reject(err);
           else resolve(this.changes);
+        }
+      );
+    });
+  }
+
+  // File management methods
+  saveOrderFile(orderId, fileId, fileType, fileName, uploadedBy) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        'INSERT INTO order_files (order_id, file_id, file_type, file_name, uploaded_by) VALUES (?, ?, ?, ?, ?)',
+        [orderId, fileId, fileType, fileName, uploadedBy],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.lastID);
+        }
+      );
+    });
+  }
+
+  getOrderFiles(orderId) {
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        'SELECT * FROM order_files WHERE order_id = ? ORDER BY created_at ASC',
+        [orderId],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
         }
       );
     });
