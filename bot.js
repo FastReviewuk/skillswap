@@ -1,5 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
-const Database = require('./database');
+// Use PostgreSQL in production, SQLite in development
+const Database = process.env.DATABASE_URL ? require('./database-postgres') : require('./database');
 
 class SkillSwapBot {
   constructor(token, adminId, paymentLink) {
