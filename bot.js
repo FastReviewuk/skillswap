@@ -160,12 +160,36 @@ Need help? Contact our support team!
       }
     });
 
-    // Text message handler for registration flow
+    // Text message handler for registration flow and requirements
     this.bot.on('text', async (ctx) => {
-      const state = this.userStates.get(ctx.from.id);
-      if (!state) return;
+      try {
+        const state = this.userStates.get(ctx.from.id);
+        if (!state) return;
 
-      await this.handleRegistrationFlow(ctx, state);
+        if (state.step === 'typing_requirements') {
+          await this.handleRequirementsText(ctx, state);
+        } else if (state.step === 'creating_quote') {
+          await this.handleQuoteCreation(ctx, state);
+        } else {
+          await this.handleRegistrationFlow(ctx, state);
+        }
+      } catch (error) {
+        console.error('Error in text handler:', error);
+        await ctx.reply('Sorry, something went wrong. Please try /start again.');
+      }
+    });
+
+    // File handler for document uploads
+    this.bot.on(['document', 'photo', 'video'], async (ctx) => {
+      try {
+        const state = this.userStates.get(ctx.from.id);
+        if (state && state.step === 'uploading_docs') {
+          await this.handleDocumentUpload(ctx, state);
+        }
+      } catch (error) {
+        console.error('Error in file handler:', error);
+        await ctx.reply('Error processing file. Please try again.');
+      }
     });
 
     // Buy button handler
@@ -185,22 +209,63 @@ Need help? Contact our support team!
       await this.handleOrderAcceptance(ctx, orderId, false);
     });
 
-    this.bot.action(/^contact_buyer_(\d+)$/, async (ctx) => {
-      const buyerId = ctx.match[1];
+    // Requirements collection handlers
+    this.bot.action(/^req_text_(\d+)$/, async (ctx) => {
+      const serviceId = ctx.match[1];
       await ctx.answerCbQuery();
       
-      try {
-        await this.bot.telegram.sendMessage(
-          buyerId,
-          `💬 The seller wants to discuss your order.\n\nYou can now chat directly with them about the requirements.`
-        );
-        
-        await ctx.editMessageText(
-          `✅ Contact request sent to buyer!\n\nYou can now chat with them about the order details.`
-        );
-      } catch (error) {
-        await ctx.answerCbQuery('Could not contact buyer');
-      }
+      this.userStates.set(ctx.from.id, { 
+        step: 'typing_requirements', 
+        serviceId: serviceId 
+      });
+      
+      await ctx.editMessageText(
+        `📝 *Describe Your Requirements*\n\nPlease type your detailed requirements:\n\n• What exactly do you need?\n• Any specific instructions?\n• Preferred timeline?\n• Special requests?\n\nType your message now:`
+      );
+    });
+
+    this.bot.action(/^req_docs_(\d+)$/, async (ctx) => {
+      const serviceId = ctx.match[1];
+      await ctx.answerCbQuery();
+      
+      this.userStates.set(ctx.from.id, { 
+        step: 'uploading_docs', 
+        serviceId: serviceId 
+      });
+      
+      await ctx.editMessageText(
+        `📎 *Upload Documents*\n\nSend any files, images, or documents related to your project:\n\n• Reference materials\n• Existing files\n• Examples\n• Specifications\n\nSend your files now (one by one):`
+      );
+    });
+
+    this.bot.action(/^send_request_(\d+)$/, async (ctx) => {
+      const serviceId = ctx.match[1];
+      await this.sendRequestToSeller(ctx, serviceId);
+    });
+
+    // Quote management handlers
+    this.bot.action(/^accept_quote_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await this.handleQuoteResponse(ctx, orderId, true);
+    });
+
+    this.bot.action(/^decline_quote_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await this.handleQuoteResponse(ctx, orderId, false);
+    });
+
+    this.bot.action(/^send_quote_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await ctx.answerCbQuery();
+      
+      this.userStates.set(ctx.from.id, { 
+        step: 'creating_quote', 
+        orderId: orderId 
+      });
+      
+      await ctx.editMessageText(
+        `💰 *Create Custom Quote*\n\nPlease provide:\n\n1. **Your price** (in USD)\n2. **Brief explanation** of what's included\n3. **Estimated delivery time**\n\nFormat: [Price] [Description]\nExample: 25.00 Logo design with 3 revisions, delivered in 2 days\n\nType your quote now:`
+      );
     });
 
     // Menu handlers
@@ -315,40 +380,36 @@ Need more help? Contact @support
   }
 
   async showMainMenu(ctx, user) {
-    const isSellerOrBoth = user.role === 'Seller' || user.role === 'Both';
-    const isBuyerOrBoth = user.role === 'Buyer' || user.role === 'Both';
+    try {
+      const isSellerOrBoth = user.role === 'Seller' || user.role === 'Both';
+      const isBuyerOrBoth = user.role === 'Buyer' || user.role === 'Both';
 
-    let menuButtons = [];
+      let menuButtons = [];
 
-    // Buyer buttons
-    if (isBuyerOrBoth) {
-      menuButtons.push(
-        [Markup.button.callback('🔍 Browse Services', 'menu_browse')],
-        [Markup.button.callback('🔎 Search Services', 'menu_search')],
-        [Markup.button.callback('📋 My Orders', 'menu_my_orders')]
-      );
+      // Buyer buttons
+      if (isBuyerOrBoth) {
+        menuButtons.push([Markup.button.callback('🔍 Browse Services', 'menu_browse')]);
+        menuButtons.push([Markup.button.callback('🔎 Search Services', 'menu_search')]);
+      }
+
+      // Seller buttons
+      if (isSellerOrBoth) {
+        menuButtons.push([Markup.button.callback('➕ Add Service', 'menu_add_service')]);
+      }
+
+      // Common buttons
+      menuButtons.push([Markup.button.callback('👤 My Profile', 'menu_profile')]);
+      menuButtons.push([Markup.button.callback('❓ Help', 'menu_help')]);
+
+      const keyboard = Markup.inlineKeyboard(menuButtons);
+
+      const welcomeText = `Welcome back, ${user.name}! 👋\n\n🎯 SkillSwap Dashboard\n\nRole: ${user.role}\nWhat would you like to do today?`;
+
+      await ctx.reply(welcomeText, keyboard);
+    } catch (error) {
+      console.error('Error in showMainMenu:', error);
+      await ctx.reply(`Welcome back, ${user.name}! 👋\n\nUse /help to see available commands.`);
     }
-
-    // Seller buttons
-    if (isSellerOrBoth) {
-      menuButtons.push(
-        [Markup.button.callback('💼 My Services', 'menu_my_services')],
-        [Markup.button.callback('➕ Add Service', 'menu_add_service')],
-        [Markup.button.callback('📊 Sales Dashboard', 'menu_sales')]
-      );
-    }
-
-    // Common buttons
-    menuButtons.push(
-      [Markup.button.callback('👤 My Profile', 'menu_profile')],
-      [Markup.button.callback('❓ Help', 'menu_help')]
-    );
-
-    const keyboard = Markup.inlineKeyboard(menuButtons);
-
-    const welcomeText = `Welcome back, ${user.name}! 👋\n\n🎯 **SkillSwap Dashboard**\n\nRole: ${user.role}\nWhat would you like to do today?`;
-
-    await ctx.reply(welcomeText, { parse_mode: 'Markdown', ...keyboard });
   }
 
   async startRegistration(ctx) {
@@ -494,47 +555,26 @@ Need more help? Contact @support
       return;
     }
 
-    const finalPrice = (service.net_price * 1.15).toFixed(2);
-    const transactionId = `TXN_${Date.now()}_${serviceId}`;
+    // Start requirements collection process
+    this.userStates.set(ctx.from.id, { 
+      step: 'collect_requirements', 
+      serviceId: serviceId,
+      service: service 
+    });
 
-    // Create order
-    await this.db.createOrder(
-      ctx.from.id,
-      service.seller_id,
-      serviceId,
-      transactionId,
-      service.net_price,
-      parseFloat(finalPrice)
-    );
-
-    // Payment link with amount
-    const paymentUrl = `${this.paymentLink}?amount=${finalPrice}&ref=${transactionId}`;
-    
-    const purchaseKeyboard = Markup.inlineKeyboard([
-      [Markup.button.url('💳 Pay Now', paymentUrl)]
+    const requirementsKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('📝 Add Text Requirements', `req_text_${serviceId}`)],
+      [Markup.button.callback('📎 Upload Documents', `req_docs_${serviceId}`)],
+      [Markup.button.callback('✅ Send Request', `send_request_${serviceId}`)]
     ]);
 
     await ctx.editMessageText(
-      `🛒 *Purchase Summary*\n\n💼 Service: ${service.title}\n👤 Seller: ${service.seller_name}\n💰 Total: $${finalPrice}\n⏱️ Delivery: ${service.delivery_time}\n\n🔒 Click below to complete payment securely:`,
-      { parse_mode: 'Markdown', ...purchaseKeyboard }
+      `📋 *Service Request: ${service.title}*\n\n👤 Seller: ${service.seller_name}\n💰 Base Price: $${(service.net_price * 1.15).toFixed(2)}\n\n📝 *Step 1: Share Your Requirements*\n\nPlease provide details about what you need:\n• Project description\n• Specific requirements\n• Files/documents\n• Deadline preferences\n\nThe seller will review and provide a custom quote.`,
+      { parse_mode: 'Markdown', ...requirementsKeyboard }
     );
 
-    // Notify seller with action buttons
-    try {
-      const sellerKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Accept Order', `accept_order_${orderId}`)],
-        [Markup.button.callback('❌ Decline Order', `decline_order_${orderId}`)],
-        [Markup.button.callback('💬 Contact Buyer', `contact_buyer_${ctx.from.id}`)]
-      ]);
-
-      await this.bot.telegram.sendMessage(
-        service.seller_id,
-        `🔔 *New Order Request!*\n\n💼 Service: ${service.title}\n👤 Buyer: ${user.name} (@${user.username || 'no username'})\n💰 You'll receive: $${service.net_price.toFixed(2)}\n📋 Order ID: ${orderId}\n\n⚠️ Customer will pay after you accept the order.\n\n📋 *Next Steps:*\n1. Accept or decline the order\n2. Wait for payment confirmation\n3. Deliver service via chat\n4. Get paid!`,
-        { parse_mode: 'Markdown', ...sellerKeyboard }
-      );
-    } catch (error) {
-      console.log('Could not notify seller:', error.message);
-    }
+    await ctx.answerCbQuery('Starting request process...');
+  }
 
     // Notify admin
     try {
@@ -573,56 +613,199 @@ Need more help? Contact @support
     }, 30000); // 30 seconds for demo
   }
 
-  async handleOrderAcceptance(ctx, orderId, accepted) {
+  async handleRequirementsText(ctx, state) {
+    const requirements = ctx.message.text;
+    
+    // Store requirements in user state
+    if (!state.requirements) state.requirements = [];
+    state.requirements.push(`📝 ${requirements}`);
+    
+    const continueKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('📎 Add Documents', `req_docs_${state.serviceId}`)],
+      [Markup.button.callback('✅ Send Request', `send_request_${state.serviceId}`)],
+      [Markup.button.callback('📝 Add More Text', `req_text_${state.serviceId}`)]
+    ]);
+
+    await ctx.reply(
+      `✅ Requirements added!\n\n📋 *Current Requirements:*\n${state.requirements.join('\n\n')}\n\nWhat would you like to do next?`,
+      { parse_mode: 'Markdown', ...continueKeyboard }
+    );
+  }
+
+  async handleDocumentUpload(ctx, state) {
+    let fileInfo = '';
+    
+    if (ctx.message.document) {
+      fileInfo = `📄 Document: ${ctx.message.document.file_name}`;
+    } else if (ctx.message.photo) {
+      fileInfo = `🖼️ Image uploaded`;
+    } else if (ctx.message.video) {
+      fileInfo = `🎥 Video uploaded`;
+    }
+
+    // Store file info in user state
+    if (!state.requirements) state.requirements = [];
+    state.requirements.push(fileInfo);
+
+    const continueKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('📎 Add More Files', `req_docs_${state.serviceId}`)],
+      [Markup.button.callback('✅ Send Request', `send_request_${state.serviceId}`)],
+      [Markup.button.callback('📝 Add Text', `req_text_${state.serviceId}`)]
+    ]);
+
+    await ctx.reply(
+      `✅ File received!\n\n📋 *Current Requirements:*\n${state.requirements.join('\n\n')}\n\nWhat would you like to do next?`,
+      { parse_mode: 'Markdown', ...continueKeyboard }
+    );
+  }
+
+  async sendRequestToSeller(ctx, serviceId) {
+    const state = this.userStates.get(ctx.from.id);
+    const user = await this.db.getUser(ctx.from.id);
+    
+    // Get service details
+    const services = await this.db.searchServices('');
+    const service = services.find(s => s.id == serviceId);
+    
+    const requirements = state.requirements ? state.requirements.join('\n\n') : 'No specific requirements provided.';
+    const transactionId = `REQ_${Date.now()}_${serviceId}`;
+
+    // Create order with requirements
+    const orderId = await this.db.createOrder(
+      ctx.from.id,
+      service.seller_id,
+      serviceId,
+      transactionId,
+      service.net_price,
+      service.net_price * 1.15,
+      requirements
+    );
+
+    // Notify seller
+    const sellerKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('💰 Send Quote', `send_quote_${orderId}`)],
+      [Markup.button.callback('❌ Decline Request', `decline_request_${orderId}`)],
+      [Markup.button.callback('💬 Ask Questions', `contact_buyer_${ctx.from.id}`)]
+    ]);
+
+    try {
+      await this.bot.telegram.sendMessage(
+        service.seller_id,
+        `🔔 *New Service Request!*\n\n💼 Service: ${service.title}\n👤 Buyer: ${user.name} (@${user.username || 'no username'})\n📋 Request ID: ${orderId}\n\n📝 *Requirements:*\n${requirements}\n\n💡 *Next Steps:*\n• Review the requirements\n• Create a custom quote\n• Or ask for clarification`,
+        { parse_mode: 'Markdown', ...sellerKeyboard }
+      );
+    } catch (error) {
+      console.log('Could not notify seller:', error.message);
+    }
+
+    await ctx.editMessageText(
+      `✅ *Request Sent!*\n\n📋 Your request has been sent to ${service.seller_name}.\n\n⏳ *What happens next:*\n1. Seller reviews your requirements\n2. You'll receive a custom quote\n3. Accept quote and pay\n4. Receive your completed work\n\n📱 You'll be notified when the seller responds.`
+    );
+
+    // Clear user state
+    this.userStates.delete(ctx.from.id);
+    await ctx.answerCbQuery('Request sent successfully!');
+  }
+
+  async handleQuoteCreation(ctx, state) {
+    const quoteText = ctx.message.text;
+    const orderId = state.orderId;
+    
+    // Parse quote (expecting format: "25.00 Description of work")
+    const parts = quoteText.split(' ');
+    const price = parseFloat(parts[0]);
+    
+    if (isNaN(price) || price <= 0) {
+      await ctx.reply('❌ Invalid price format. Please use: [Price] [Description]\nExample: 25.00 Logo design with revisions');
+      return;
+    }
+
+    const description = parts.slice(1).join(' ');
+    const finalPrice = (price * 1.15).toFixed(2);
+
+    // Update order with quote
+    await this.db.updateOrderQuote(orderId, price, quoteText);
+
+    // Get order details
+    const order = await this.db.getOrder(orderId);
+
+    // Send quote to buyer
+    const quoteKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Accept Quote', `accept_quote_${orderId}`)],
+      [Markup.button.callback('❌ Decline Quote', `decline_quote_${orderId}`)],
+      [Markup.button.callback('💬 Ask Questions', `contact_seller_${order.seller_id}`)]
+    ]);
+
+    try {
+      await this.bot.telegram.sendMessage(
+        order.buyer_id,
+        `💰 *Custom Quote Received!*\n\n📋 Request ID: ${orderId}\n💵 Seller's Price: $${price.toFixed(2)}\n💳 Total (with fees): $${finalPrice}\n\n📝 *Quote Details:*\n${description}\n\n🤔 *Your Options:*\n• Accept and proceed to payment\n• Decline and look elsewhere\n• Ask questions for clarification`,
+        { parse_mode: 'Markdown', ...quoteKeyboard }
+      );
+    } catch (error) {
+      console.log('Could not notify buyer:', error.message);
+    }
+
+    await ctx.reply(
+      `✅ *Quote Sent!*\n\n💰 Your quote: $${price.toFixed(2)}\n💳 Customer pays: $${finalPrice}\n💵 You receive: $${price.toFixed(2)}\n\n📱 The buyer will be notified and can accept or decline your quote.`
+    );
+
+    this.userStates.delete(ctx.from.id);
+  }
+
+  async handleQuoteResponse(ctx, orderId, accepted) {
     await ctx.answerCbQuery();
     
     const order = await this.db.getOrder(orderId);
-    if (!order || order.seller_id !== ctx.from.id) {
+    if (!order || order.buyer_id !== ctx.from.id) {
       await ctx.editMessageText('❌ Order not found or access denied.');
       return;
     }
 
     if (accepted) {
       // Update order status
-      await this.db.updateOrderStatus(orderId, 'accepted');
+      await this.db.updateOrderStatus(orderId, 'quote_accepted');
       
-      // Notify buyer with payment link
-      const finalPrice = order.total_amount.toFixed(2);
+      // Generate payment link
+      const finalPrice = (order.custom_price * 1.15).toFixed(2);
       const paymentUrl = `${this.paymentLink}?amount=${finalPrice}&ref=${order.transaction_id}`;
       
       const paymentKeyboard = Markup.inlineKeyboard([
-        [Markup.button.url('💳 Pay Now', paymentUrl)],
-        [Markup.button.callback('💬 Contact Seller', `contact_seller_${order.seller_id}`)]
+        [Markup.button.url('💳 Pay Now', paymentUrl)]
       ]);
 
-      try {
-        await this.bot.telegram.sendMessage(
-          order.buyer_id,
-          `✅ *Order Accepted!*\n\n🎉 Great news! The seller has accepted your order.\n\n💼 Service: Order #${orderId}\n💰 Total: $${finalPrice}\n\n🔒 Click below to complete payment securely:\n\n📋 *After Payment:*\n• Seller will be notified\n• Work will begin\n• You'll receive files via chat\n• Rate the seller when done`,
-          { parse_mode: 'Markdown', ...paymentKeyboard }
-        );
-      } catch (error) {
-        console.log('Could not notify buyer:', error.message);
-      }
-
       await ctx.editMessageText(
-        `✅ *Order Accepted!*\n\nThe buyer has been notified and can now make payment.\n\n📋 *Next Steps:*\n1. Wait for payment confirmation\n2. Start working on the order\n3. Deliver files via chat\n4. Get paid automatically!`
+        `✅ *Quote Accepted!*\n\n💰 Total Amount: $${finalPrice}\n\n🔒 Click below to complete payment securely:\n\n📋 *After Payment:*\n• Seller will be notified\n• Work will begin\n• You'll receive completed work via chat\n• Rate the seller when satisfied`,
+        { parse_mode: 'Markdown', ...paymentKeyboard }
       );
 
-    } else {
-      // Order declined
-      await this.db.updateOrderStatus(orderId, 'declined');
-      
+      // Notify seller
       try {
         await this.bot.telegram.sendMessage(
-          order.buyer_id,
-          `❌ *Order Declined*\n\nSorry, the seller has declined your order.\n\nYou can:\n• Browse other similar services\n• Contact the seller for more info\n• Try a different service provider`
+          order.seller_id,
+          `🎉 *Quote Accepted!*\n\n📋 Order ID: ${orderId}\n💰 Amount: $${order.custom_price.toFixed(2)}\n\n⏳ *Status:* Waiting for payment\n\n📱 You'll be notified once payment is confirmed. Then you can start working!`
         );
       } catch (error) {
-        console.log('Could not notify buyer:', error.message);
+        console.log('Could not notify seller:', error.message);
       }
 
-      await ctx.editMessageText(`❌ Order declined and buyer notified.`);
+    } else {
+      // Quote declined
+      await this.db.updateOrderStatus(orderId, 'quote_declined');
+      
+      await ctx.editMessageText(
+        `❌ *Quote Declined*\n\nYou can:\n• Browse other services\n• Contact the seller for a revised quote\n• Look for different providers`
+      );
+
+      // Notify seller
+      try {
+        await this.bot.telegram.sendMessage(
+          order.seller_id,
+          `❌ *Quote Declined*\n\n📋 Order ID: ${orderId}\n\nThe buyer has declined your quote. You can:\n• Offer a revised quote\n• Contact them for clarification`
+        );
+      } catch (error) {
+        console.log('Could not notify seller:', error.message);
+      }
     }
   }
 

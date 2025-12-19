@@ -47,7 +47,10 @@ class Database {
         transaction_id TEXT UNIQUE,
         net_amount REAL,
         total_amount REAL,
-        status TEXT DEFAULT 'pending',
+        custom_price REAL,
+        buyer_requirements TEXT,
+        seller_quote TEXT,
+        status TEXT DEFAULT 'request_sent',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (buyer_id) REFERENCES users (telegram_id),
         FOREIGN KEY (seller_id) REFERENCES users (telegram_id),
@@ -154,14 +157,27 @@ class Database {
   }
 
   // Order methods
-  createOrder(buyerId, sellerId, serviceId, transactionId, netAmount, totalAmount) {
+  createOrder(buyerId, sellerId, serviceId, transactionId, netAmount, totalAmount, requirements = '') {
     return new Promise((resolve, reject) => {
       this.db.run(
-        'INSERT INTO orders (buyer_id, seller_id, service_id, transaction_id, net_amount, total_amount) VALUES (?, ?, ?, ?, ?, ?)',
-        [buyerId, sellerId, serviceId, transactionId, netAmount, totalAmount],
+        'INSERT INTO orders (buyer_id, seller_id, service_id, transaction_id, net_amount, total_amount, buyer_requirements) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [buyerId, sellerId, serviceId, transactionId, netAmount, totalAmount, requirements],
         function(err) {
           if (err) reject(err);
           else resolve(this.lastID);
+        }
+      );
+    });
+  }
+
+  updateOrderQuote(orderId, customPrice, sellerQuote) {
+    return new Promise((resolve, reject) => {
+      this.db.run(
+        'UPDATE orders SET custom_price = ?, seller_quote = ?, status = ? WHERE id = ?',
+        [customPrice, sellerQuote, 'quote_sent', orderId],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.changes);
         }
       );
     });
