@@ -170,6 +170,8 @@ Need help? Contact our support team!
           await this.handleRequirementsText(ctx, state);
         } else if (state.step === 'creating_quote') {
           await this.handleQuoteCreation(ctx, state);
+        } else if (state.step === 'search_keyword') {
+          await this.handleSearchKeyword(ctx, state);
         } else {
           await this.handleRegistrationFlow(ctx, state);
         }
@@ -282,7 +284,15 @@ Need help? Contact our support team!
     this.bot.action('menu_search', async (ctx) => {
       await ctx.answerCbQuery();
       this.userStates.set(ctx.from.id, { step: 'search_keyword' });
-      await ctx.editMessageText('🔎 What service are you looking for?\n\nType keywords (e.g., "web design", "logo", "writing")');
+      
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '🔎 **Search Services**\n\nWhat service are you looking for?\n\nType keywords like:\n• "web design"\n• "logo creation"\n• "content writing"\n• "data entry"\n\nSend your search term now:',
+        { parse_mode: 'Markdown', ...backButton }
+      );
     });
 
     this.bot.action('menu_add_service', async (ctx) => {
@@ -317,6 +327,21 @@ Need help? Contact our support team!
       await ctx.editMessageText(profileText, { parse_mode: 'Markdown', ...backButton });
     });
 
+    this.bot.action('menu_my_orders', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showMyOrders(ctx);
+    });
+
+    this.bot.action('menu_my_services', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showMyServices(ctx);
+    });
+
+    this.bot.action('menu_sales', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showSalesDashboard(ctx);
+    });
+
     this.bot.action('menu_help', async (ctx) => {
       await ctx.answerCbQuery();
       const helpText = `
@@ -324,29 +349,32 @@ Need help? Contact our support team!
 
 **🛒 For Buyers:**
 • Browse or search services
-• Purchase with secure payment
-• Receive files via chat
-• Rate sellers after completion
+• Share requirements & documents
+• Get custom quotes
+• Pay securely via Stripe
+• Receive completed work
+• Rate sellers
 
 **💼 For Sellers:**
 • Add your services
-• Receive order notifications
-• Deliver files via chat
-• Get paid (85% of total)
+• Receive requests with files
+• Create custom quotes
+• Get paid after delivery
+• Build your reputation
 
-**💰 How Payments Work:**
-1. Customer pays via Stripe link
-2. You get notified of new order
-3. Deliver service via chat/files
-4. Customer rates your work
-5. You receive 85% of payment
+**💰 How It Works:**
+1. Buyer selects service & shares requirements
+2. Seller reviews & sends custom quote
+3. Buyer accepts & pays (seller gets 85%)
+4. Seller delivers work via chat
+5. Buyer rates the experience
 
 **📁 File Sharing:**
-• Send files directly in chat
-• Supports images, documents, videos
-• Secure and private delivery
+• Upload documents, images, videos
+• Share requirements easily
+• Receive completed work directly
 
-Need more help? Contact @support
+Need help? Contact @support
       `;
       
       const backButton = Markup.inlineKeyboard([
@@ -367,15 +395,40 @@ Need more help? Contact @support
       const orderId = ctx.match[1];
       const rating = parseInt(ctx.match[2]);
       
+      await ctx.answerCbQuery();
+      
       const order = await this.db.getOrder(orderId);
       if (!order || order.buyer_id !== ctx.from.id) {
-        await ctx.answerCbQuery('Invalid order');
+        await ctx.editMessageText('❌ Invalid order or access denied.');
         return;
       }
 
+      // Create review
       await this.db.createReview(orderId, ctx.from.id, order.seller_id, rating);
-      await ctx.editMessageText(`⭐ Thank you for rating! You gave ${rating} stars.`);
-      await ctx.answerCbQuery('Rating submitted!');
+      
+      // Update order status
+      await this.db.updateOrderStatus(orderId, 'completed');
+
+      const stars = '⭐'.repeat(rating);
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('📋 My Orders', 'menu_my_orders')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+
+      await ctx.editMessageText(
+        `✅ **Rating Submitted!**\n\n${stars} You gave ${rating} stars\n\nThank you for your feedback! This helps other buyers make informed decisions.\n\n🎉 Order completed successfully!`,
+        { parse_mode: 'Markdown', ...backButton }
+      );
+
+      // Notify seller about rating
+      try {
+        await this.bot.telegram.sendMessage(
+          order.seller_id,
+          `⭐ **New Rating Received!**\n\n📋 Order #${orderId}\n${stars} ${rating}/5 stars\n\n🎉 Great job! Keep up the excellent work!`
+        );
+      } catch (error) {
+        console.log('Could not notify seller about rating:', error.message);
+      }
     });
   }
 
@@ -771,7 +824,8 @@ Need more help? Contact @support
       const paymentUrl = `${this.paymentLink}?amount=${finalPrice}&ref=${order.transaction_id}`;
       
       const paymentKeyboard = Markup.inlineKeyboard([
-        [Markup.button.url('💳 Pay Now', paymentUrl)]
+        [Markup.button.url('💳 Pay Now', paymentUrl)],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
       ]);
 
       await ctx.editMessageText(
@@ -789,12 +843,41 @@ Need more help? Contact @support
         console.log('Could not notify seller:', error.message);
       }
 
+      // Simulate payment completion and rating request
+      setTimeout(async () => {
+        try {
+          const ratingKeyboard = Markup.inlineKeyboard([
+            [
+              Markup.button.callback('⭐ 1', `rate_${orderId}_1`),
+              Markup.button.callback('⭐ 2', `rate_${orderId}_2`),
+              Markup.button.callback('⭐ 3', `rate_${orderId}_3`),
+              Markup.button.callback('⭐ 4', `rate_${orderId}_4`),
+              Markup.button.callback('⭐ 5', `rate_${orderId}_5`)
+            ],
+            [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+          ]);
+
+          await this.bot.telegram.sendMessage(
+            ctx.from.id,
+            `✅ **Work Completed!**\n\n📋 Order ID: ${orderId}\n\nThe seller has delivered your work. How would you rate this service?`,
+            { parse_mode: 'Markdown', ...ratingKeyboard }
+          );
+        } catch (error) {
+          console.log('Could not send rating request:', error.message);
+        }
+      }, 30000); // 30 seconds for demo
+
     } else {
       // Quote declined
       await this.db.updateOrderStatus(orderId, 'quote_declined');
       
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
       await ctx.editMessageText(
-        `❌ *Quote Declined*\n\nYou can:\n• Browse other services\n• Contact the seller for a revised quote\n• Look for different providers`
+        `❌ *Quote Declined*\n\nYou can:\n• Browse other services\n• Contact the seller for a revised quote\n• Look for different providers`,
+        { parse_mode: 'Markdown', ...backButton }
       );
 
       // Notify seller
@@ -807,6 +890,139 @@ Need more help? Contact @support
         console.log('Could not notify seller:', error.message);
       }
     }
+  }
+
+  async showMyOrders(ctx) {
+    const orders = await this.db.getUserOrders(ctx.from.id);
+    
+    if (orders.length === 0) {
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Browse Services', 'menu_browse')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '📋 **My Orders**\n\nYou haven\'t placed any orders yet.\n\nStart by browsing available services!',
+        { parse_mode: 'Markdown', ...backButton }
+      );
+      return;
+    }
+
+    let message = '📋 **My Orders**\n\n';
+    
+    orders.forEach((order, i) => {
+      const status = this.getOrderStatusEmoji(order.status);
+      const price = order.custom_price ? `$${(order.custom_price * 1.15).toFixed(2)}` : `$${order.total_amount.toFixed(2)}`;
+      
+      message += `${i + 1}. ${status} Order #${order.id}\n`;
+      message += `   💰 ${price} • 📅 ${new Date(order.created_at).toLocaleDateString()}\n`;
+      message += `   Status: ${order.status.replace('_', ' ')}\n\n`;
+    });
+
+    const backButton = Markup.inlineKeyboard([
+      [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+    ]);
+
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', ...backButton });
+  }
+
+  async showMyServices(ctx) {
+    const services = await this.db.getUserServices(ctx.from.id);
+    
+    if (services.length === 0) {
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Add Service', 'menu_add_service')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.editMessageText(
+        '💼 **My Services**\n\nYou haven\'t added any services yet.\n\nStart by creating your first service!',
+        { parse_mode: 'Markdown', ...backButton }
+      );
+      return;
+    }
+
+    let message = '💼 **My Services**\n\n';
+    
+    services.forEach((service, i) => {
+      const promoted = service.is_promoted ? '🌟 ' : '';
+      const price = (service.net_price * 1.15).toFixed(2);
+      
+      message += `${i + 1}. ${promoted}**${service.title}**\n`;
+      message += `   💰 $${price} • ⏱️ ${service.delivery_time}\n`;
+      message += `   📝 ${service.description}\n\n`;
+    });
+
+    const backButton = Markup.inlineKeyboard([
+      [Markup.button.callback('➕ Add Service', 'menu_add_service')],
+      [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+    ]);
+
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', ...backButton });
+  }
+
+  async showSalesDashboard(ctx) {
+    const stats = await this.db.getSellerStats(ctx.from.id);
+    
+    const message = `
+📊 **Sales Dashboard**
+
+💰 **Earnings:**
+• Total Orders: ${stats.totalOrders}
+• Completed: ${stats.completedOrders}
+• Pending: ${stats.pendingOrders}
+• Total Earned: $${stats.totalEarned.toFixed(2)}
+
+⭐ **Reputation:**
+• Average Rating: ${stats.avgRating > 0 ? stats.avgRating.toFixed(1) : 'No ratings yet'}
+• Total Reviews: ${stats.totalReviews}
+
+📈 **Performance:**
+• Active Services: ${stats.activeServices}
+• This Month: ${stats.monthlyOrders} orders
+    `;
+
+    const backButton = Markup.inlineKeyboard([
+      [Markup.button.callback('💼 My Services', 'menu_my_services')],
+      [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+    ]);
+
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', ...backButton });
+  }
+
+  async handleSearchKeyword(ctx, state) {
+    const keyword = ctx.message.text;
+    const services = await this.db.searchServices(keyword);
+    
+    this.userStates.delete(ctx.from.id);
+    
+    if (services.length === 0) {
+      const backButton = Markup.inlineKeyboard([
+        [Markup.button.callback('🔍 Browse All', 'menu_browse')],
+        [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
+      ]);
+      
+      await ctx.reply(
+        `🔍 **Search Results**\n\nNo services found for "${keyword}" 😔\n\nTry different keywords or browse all services.`,
+        { parse_mode: 'Markdown', ...backButton }
+      );
+      return;
+    }
+
+    await this.displayServicesWithMenu(ctx, services, `🔍 Search: "${keyword}"`);
+  }
+
+  getOrderStatusEmoji(status) {
+    const statusEmojis = {
+      'request_sent': '📤',
+      'quote_sent': '💰',
+      'quote_accepted': '✅',
+      'quote_declined': '❌',
+      'paid': '💳',
+      'completed': '🎉',
+      'cancelled': '🚫'
+    };
+    return statusEmojis[status] || '📋';
   }
 
   setWebhook(url) {

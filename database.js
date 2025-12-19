@@ -209,6 +209,64 @@ class Database {
     });
   }
 
+  getUserOrders(userId) {
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        'SELECT * FROM orders WHERE buyer_id = ? ORDER BY created_at DESC',
+        [userId],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        }
+      );
+    });
+  }
+
+  getUserServices(userId) {
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        'SELECT * FROM services WHERE seller_id = ? ORDER BY created_at DESC',
+        [userId],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        }
+      );
+    });
+  }
+
+  getSellerStats(sellerId) {
+    return new Promise((resolve, reject) => {
+      const queries = {
+        totalOrders: 'SELECT COUNT(*) as count FROM orders WHERE seller_id = ?',
+        completedOrders: 'SELECT COUNT(*) as count FROM orders WHERE seller_id = ? AND status = "completed"',
+        pendingOrders: 'SELECT COUNT(*) as count FROM orders WHERE seller_id = ? AND status IN ("request_sent", "quote_sent", "quote_accepted")',
+        totalEarned: 'SELECT SUM(custom_price) as total FROM orders WHERE seller_id = ? AND status = "completed"',
+        avgRating: 'SELECT AVG(rating) as avg FROM reviews WHERE seller_id = ?',
+        totalReviews: 'SELECT COUNT(*) as count FROM reviews WHERE seller_id = ?',
+        activeServices: 'SELECT COUNT(*) as count FROM services WHERE seller_id = ?',
+        monthlyOrders: 'SELECT COUNT(*) as count FROM orders WHERE seller_id = ? AND strftime("%Y-%m", created_at) = strftime("%Y-%m", "now")'
+      };
+
+      const stats = {};
+      const promises = Object.keys(queries).map(key => 
+        new Promise((res, rej) => {
+          this.db.get(queries[key], [sellerId], (err, row) => {
+            if (err) rej(err);
+            else {
+              stats[key] = row.count || row.total || row.avg || 0;
+              res();
+            }
+          });
+        })
+      );
+
+      Promise.all(promises)
+        .then(() => resolve(stats))
+        .catch(reject);
+    });
+  }
+
   // Review methods
   createReview(orderId, buyerId, sellerId, rating) {
     return new Promise((resolve, reject) => {
