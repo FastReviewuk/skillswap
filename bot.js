@@ -1,6 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
-// Use PostgreSQL in production, SQLite in development
-const Database = process.env.DATABASE_URL ? require('./database-postgres') : require('./database');
+// Use SQLite for now (PostgreSQL setup pending)
+const Database = require('./database');
 
 class SkillSwapBot {
   constructor(token, adminId, paymentLink) {
@@ -25,7 +25,8 @@ class SkillSwapBot {
         if (user) {
           await this.showMainMenu(ctx, user);
         } else {
-          await this.startRegistration(ctx);
+          // Show SkillSwap intro message for new users
+          await this.showSkillSwapIntro(ctx);
         }
       } catch (error) {
         console.error('Start error:', error);
@@ -392,6 +393,21 @@ Need help? Contact @xiniluca
       );
     });
 
+    // Work completion handler
+    this.bot.action(/^complete_work_(\d+)$/, async (ctx) => {
+      const orderId = ctx.match[1];
+      await ctx.answerCbQuery();
+      
+      this.userStates.set(ctx.from.id, { 
+        step: 'completing_work', 
+        orderId: orderId 
+      });
+      
+      await ctx.editMessageText(
+        `✅ **Mark Work as Completed**\n\n📋 Order #${orderId}\n\n🎯 **Final Step:**\nSend the completed work to the buyer now:\n\n• Upload final files/documents\n• Send results as text\n• Share any deliverables\n\nOnce you send the work, the buyer will be notified and can rate your service.\n\n📎 **Send your completed work now:**`
+      );
+    });
+
     // Rating buttons
     this.bot.action(/^rate_(\d+)_(\d+)$/, async (ctx) => {
       const orderId = ctx.match[1];
@@ -456,6 +472,8 @@ Need help? Contact @xiniluca
           await this.handleMessageToBuyer(ctx, state);
         } else if (state.step === 'messaging_seller') {
           await this.handleMessageToSeller(ctx, state);
+        } else if (state.step === 'completing_work') {
+          await this.handleWorkCompletion(ctx, state);
         } else {
           await this.handleRegistrationFlow(ctx, state);
         }
@@ -471,6 +489,8 @@ Need help? Contact @xiniluca
         const state = this.userStates.get(ctx.from.id);
         if (state && state.step === 'uploading_docs') {
           await this.handleDocumentUpload(ctx, state);
+        } else if (state && state.step === 'completing_work') {
+          await this.handleWorkCompletion(ctx, state);
         }
       } catch (error) {
         console.error('Error in file handler:', error);
@@ -485,9 +505,6 @@ Need help? Contact @xiniluca
       const isBuyerOrBoth = user.role === 'Buyer' || user.role === 'Both';
 
       let menuButtons = [];
-
-      // Featured button at the top
-      menuButtons.push([Markup.button.callback('🚀 What is SkillSwap?', 'menu_about')]);
 
       // Buyer buttons
       if (isBuyerOrBoth) {
@@ -520,9 +537,55 @@ Need help? Contact @xiniluca
     }
   }
 
+  async showSkillSwapIntro(ctx) {
+    const introText = `
+🚀 **Welcome to SkillSwap!** 
+
+Turn your 10-minute skill into real cash inside Telegram.
+
+**Got something you're good at?**
+✅ Fix grammar
+✅ Design a Canva post  
+✅ Explain crypto basics
+✅ Debug a spreadsheet
+✅ Translate a paragraph
+✅ Give fitness tips
+
+You can sell it. Today. For real $$.
+
+💡 **How it works:**
+**SELL:** Add service → describe your micro-skill (under 15 mins), set your price
+**BUY:** Browse gigs → pay securely → get your result in-chat
+**EARN:** Every time someone buys your skill, you get paid (minus a small 15% service fee)
+
+We handle the payment link. You deliver the value. It's that simple.
+
+🌟 **Why join?**
+• No sign-ups — just Telegram
+• Get paid in dollars — fast & easy  
+• Top sellers get featured (promote your gig for just $1.99/month!)
+• Build your reputation with star ratings ⭐⭐⭐⭐⭐
+
+💬 *"I made $12 last week just by proofreading 4 texts between classes."* — Sofia, student & SkillSwap seller
+
+✨ Your skill has value. Even if it feels "small" — someone out there needs it right now.
+
+**SkillSwap — where tiny talents turn into real income.** 💰
+
+Ready to get started? Let's register you!
+    `;
+    
+    await ctx.reply(introText, { parse_mode: 'Markdown' });
+    
+    // Start registration after intro
+    setTimeout(async () => {
+      await this.startRegistration(ctx);
+    }, 2000);
+  }
+
   async startRegistration(ctx) {
     this.userStates.set(ctx.from.id, { step: 'name' });
-    await ctx.reply(`Welcome to SkillSwap! 🎉\n\nLet's get you registered. First, what's your name?`);
+    await ctx.reply(`Let's get you registered! 🎉\n\nFirst, what's your name?`);
   }
 
   async handleRegistrationFlow(ctx, state) {
@@ -899,33 +962,25 @@ Need help? Contact @xiniluca
           order.seller_id,
           `🎉 *Quote Accepted!*\n\n📋 Order ID: ${orderId}\n💰 Amount: $${order.custom_price.toFixed(2)}\n\n⏳ *Status:* Waiting for payment\n\n📱 You'll be notified once payment is confirmed. Then you can start working!`
         );
+        
+        // Send work management buttons
+        const workKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Mark as Completed', `complete_work_${orderId}`)],
+          [Markup.button.callback('💬 Message Buyer', `message_buyer_${orderId}`)],
+          [Markup.button.callback('📊 Sales Dashboard', 'menu_sales')]
+        ]);
+
+        await this.bot.telegram.sendMessage(
+          order.seller_id,
+          `🚀 **Work Management:**\nUse the buttons below to manage this order.`,
+          { parse_mode: 'Markdown', ...workKeyboard }
+        );
+
       } catch (error) {
         console.log('Could not notify seller:', error.message);
       }
 
-      // Simulate payment completion and rating request
-      setTimeout(async () => {
-        try {
-          const ratingKeyboard = Markup.inlineKeyboard([
-            [
-              Markup.button.callback('⭐ 1', `rate_${orderId}_1`),
-              Markup.button.callback('⭐ 2', `rate_${orderId}_2`),
-              Markup.button.callback('⭐ 3', `rate_${orderId}_3`),
-              Markup.button.callback('⭐ 4', `rate_${orderId}_4`),
-              Markup.button.callback('⭐ 5', `rate_${orderId}_5`)
-            ],
-            [Markup.button.callback('🏠 Back to Menu', 'back_to_menu')]
-          ]);
-
-          await this.bot.telegram.sendMessage(
-            ctx.from.id,
-            `✅ **Work Completed!**\n\n📋 Order ID: ${orderId}\n\nThe seller has delivered your work. How would you rate this service?`,
-            { parse_mode: 'Markdown', ...ratingKeyboard }
-          );
-        } catch (error) {
-          console.log('Could not send rating request:', error.message);
-        }
-      }, 30000); // 30 seconds for demo
+      // Rating will be triggered when seller marks work as completed
 
     } else {
       // Quote declined
@@ -1302,12 +1357,121 @@ Need help? Contact @xiniluca
     this.userStates.delete(ctx.from.id);
   }
 
+  async handleWorkCompletion(ctx, state) {
+    const orderId = state.orderId;
+    
+    // Get order details
+    const order = await this.db.getOrder(orderId);
+    if (!order || order.seller_id !== ctx.from.id) {
+      await ctx.reply('❌ Invalid order or access denied.');
+      this.userStates.delete(ctx.from.id);
+      return;
+    }
+
+    // Get seller info
+    const seller = await this.db.getUser(ctx.from.id);
+    
+    let workContent = '';
+    let fileInfo = null;
+    
+    // Handle different types of content
+    if (ctx.message.text) {
+      workContent = `📝 **Completed Work:**\n${ctx.message.text}`;
+    } else if (ctx.message.document) {
+      workContent = `📄 **Completed Work File:**\n${ctx.message.document.file_name}`;
+      fileInfo = {
+        fileId: ctx.message.document.file_id,
+        fileType: 'document',
+        fileName: ctx.message.document.file_name
+      };
+    } else if (ctx.message.photo) {
+      workContent = `🖼️ **Completed Work Image**`;
+      fileInfo = {
+        fileId: ctx.message.photo[ctx.message.photo.length - 1].file_id,
+        fileType: 'photo',
+        fileName: 'completed_work.jpg'
+      };
+    } else if (ctx.message.video) {
+      workContent = `🎥 **Completed Work Video**`;
+      fileInfo = {
+        fileId: ctx.message.video.file_id,
+        fileType: 'video',
+        fileName: ctx.message.video.file_name || 'completed_work.mp4'
+      };
+    }
+
+    // Update order status to completed
+    await this.db.updateOrderStatus(orderId, 'work_delivered');
+
+    // Forward work to buyer
+    try {
+      // Send rating keyboard to buyer
+      const ratingKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('⭐ 1', `rate_${orderId}_1`),
+          Markup.button.callback('⭐ 2', `rate_${orderId}_2`),
+          Markup.button.callback('⭐ 3', `rate_${orderId}_3`),
+          Markup.button.callback('⭐ 4', `rate_${orderId}_4`),
+          Markup.button.callback('⭐ 5', `rate_${orderId}_5`)
+        ],
+        [Markup.button.callback('💬 Message Seller', `message_seller_${orderId}`)]
+      ]);
+
+      // Forward the actual work content
+      if (fileInfo) {
+        // Forward file
+        if (fileInfo.fileType === 'document') {
+          await this.bot.telegram.sendDocument(order.buyer_id, fileInfo.fileId, {
+            caption: `✅ **Work Completed!**\n\n📋 Order #${orderId}\n👤 From: ${seller.name}\n\n${workContent}\n\n⭐ **Please rate this service:**`,
+            parse_mode: 'Markdown'
+          });
+        } else if (fileInfo.fileType === 'photo') {
+          await this.bot.telegram.sendPhoto(order.buyer_id, fileInfo.fileId, {
+            caption: `✅ **Work Completed!**\n\n📋 Order #${orderId}\n👤 From: ${seller.name}\n\n${workContent}\n\n⭐ **Please rate this service:**`,
+            parse_mode: 'Markdown'
+          });
+        } else if (fileInfo.fileType === 'video') {
+          await this.bot.telegram.sendVideo(order.buyer_id, fileInfo.fileId, {
+            caption: `✅ **Work Completed!**\n\n📋 Order #${orderId}\n👤 From: ${seller.name}\n\n${workContent}\n\n⭐ **Please rate this service:**`,
+            parse_mode: 'Markdown'
+          });
+        }
+        
+        // Send rating buttons separately
+        await this.bot.telegram.sendMessage(
+          order.buyer_id,
+          `⭐ **Rate this service:**\nHow satisfied are you with the work?`,
+          { parse_mode: 'Markdown', ...ratingKeyboard }
+        );
+      } else {
+        // Send text work with rating buttons
+        await this.bot.telegram.sendMessage(
+          order.buyer_id,
+          `✅ **Work Completed!**\n\n📋 Order #${orderId}\n👤 From: ${seller.name}\n\n${workContent}\n\n⭐ **Please rate this service:**`,
+          { parse_mode: 'Markdown', ...ratingKeyboard }
+        );
+      }
+
+      // Confirm to seller
+      await ctx.reply(
+        `✅ **Work Delivered Successfully!**\n\n📋 Order #${orderId}\n📤 Your completed work has been sent to the buyer.\n\n⭐ They will now rate your service.\n💰 Payment will be processed once rated.\n\n🎉 Great job!`
+      );
+
+    } catch (error) {
+      console.log('Could not deliver work to buyer:', error.message);
+      await ctx.reply('❌ Could not deliver work to buyer. Please try again or contact support.');
+    }
+
+    this.userStates.delete(ctx.from.id);
+  }
+
   getOrderStatusEmoji(status) {
     const statusEmojis = {
       'request_sent': '📤',
       'quote_sent': '💰',
       'quote_accepted': '✅',
       'quote_declined': '❌',
+      'work_delivered': '📦',
       'paid': '💳',
       'completed': '🎉',
       'cancelled': '🚫'
